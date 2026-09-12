@@ -22,7 +22,11 @@ public class AgentController {
     }
 
     public record ChatRequest(String prompt) {}
-    public record ChatResponse(String prompt, String response, List<String> toolsAvailable) {}
+    public record ChatResponse(
+            String prompt,
+            String response,
+            List<String> toolsExecuted,
+            List<String> toolsAvailable) {}
 
     @PostMapping(value = "/chat", consumes = "application/json", produces = "application/json")
     public ResponseEntity<?> chat(@RequestBody(required = false) final ChatRequest request) {
@@ -34,9 +38,13 @@ public class AgentController {
         }
 
         try {
-            final String agentAnswer = agentService.chat(request.prompt());
-            final List<String> tools = agentService.getAvailableToolNames();
-            return ResponseEntity.ok(new ChatResponse(request.prompt(), agentAnswer, tools));
+            final AgentService.ChatResult result = agentService.chat(request.prompt());
+            return ResponseEntity.ok(new ChatResponse(
+                    request.prompt(),
+                    result.response(),
+                    result.toolsExecuted(),
+                    result.toolsAvailable()
+            ));
         } catch (Exception e) {
             log.error("Error executing agent chat: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
