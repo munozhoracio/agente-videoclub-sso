@@ -1,215 +1,250 @@
-# Architecture: Frontend Integration & SSO Token Propagation (Token Relay)
+# SSO Token Propagation (Token Relay) — Implemented Architecture
 
-## 1. Executive Summary & Problem Statement
+**Status:** implemented and verified end-to-end.
+**Scope:** `videoclub-agent` (`:8085`), `springboot-sso` (`:8080`), Keycloak realm `videoclub` (`:9091`).
 
-In the initial prototype of `videoclub-agent`, the agent authenticated against Keycloak using **Direct Grant (Resource Owner Password Credentials - ROPC)** with credentials hardcoded in `.env`:
+This document describes how the agent currently authenticates its callers and how it authorizes its
+MCP tool calls. It is a description of the running system, not a proposal.
+
+---
+
+## 1. What this replaced
+
+The initial prototype authenticated against Keycloak with the **Resource Owner Password Credentials**
+grant, using a human's credentials stored in `.env`:
+
 ```properties
 KEYCLOAK_USERNAME=usuarioadmin
 KEYCLOAK_PASSWORD=usuarioadmin
 ```
 
-While acceptable for an initial offline spike, keeping user credentials in backend configuration violates core architectural principles:
-1. **OAuth 2.1 Deprecation**: The ROPC grant is formally deprecated and removed in OAuth 2.1 due to credential leakage risks.
-2. **Loss of Identity & Auditability**: Every MCP tool execution is logged under `usuarioadmin`, destroying non-repudiation in event sourcing and audit logs.
-3. **Broken Authorization Boundaries**: A regular user in the React frontend could ask the agent for sensitive data (e.g., membership records), and the agent would fulfill it because it runs with full admin privileges.
+Three problems made that untenable beyond an offline spike:
+
+1. **ROPC is deprecated.** The grant is removed in OAuth 2.1 because it requires the client to handle
+   the user's password directly.
+2. **Identity was lost.** Every MCP tool execution was attributed to `usuarioadmin`, so audit logs
+   and event sourcing recorded the agent, never the person.
+3. **Authorization was bypassed.** Any user of the React app could ask the agent for member records
+   and get them, because the agent always ran with admin privileges.
+
+All three are gone. `KEYCLOAK_USERNAME` and `KEYCLOAK_PASSWORD` no longer exist in `.env`,
+`.env.example`, or `application.yml`.
 
 ---
 
-## 2. Target Architecture: The Token Relay Pattern
-
-When `react-sso` integrates with `videoclub-agent`, we transition to the **OAuth2 Token Relay Pattern**:
+## 2. Architecture
 
 ```
  ┌─────────────┐                      ┌────────────────────┐
  │  React SPA  │                      │    Keycloak SSO    │
- │ (react-sso) │                      │     (:9091)        │
+ │ (react-sso) │                      │      (:9091)       │
  └──────┬──────┘                      └─────────┬──────────┘
         │                                       │
         │ 1. Auth Code Flow + PKCE              │
         ├──────────────────────────────────────>│
-        │ 2. Return User Access Token (JWT)     │
+        │ 2. User access token (JWT)            │
         │<──────────────────────────────────────┤
         │                                       │
         │ 3. POST /api/agent/chat               │
         │    Authorization: Bearer <user_jwt>   │
         ▼                                       │
  ┌──────────────────────┐                       │
+ │  Spring Cloud Gateway│  forwards the header  │
+ │       (:9500)        │  unchanged            │
+ └──────┬───────────────┘                       │
+        │                                       │
+        ▼                                       │
+ ┌──────────────────────┐                       │
  │   videoclub-agent    │                       │
  │       (:8085)        │                       │
  ├──────────────────────┤                       │
- │ • Resource Server    │ 4. Validate JWT       │
- │ • Token Extractor    ├───────────────────────┤ (via JWKS cache)
- │ • Spring AI Agent    │                       │
+ │ • Resource Server    │ 4. Validate signature │
+ │ • TokenRelayService  ├───────────────────────┤ (JWKS, cached)
+ │ • Spring AI ChatClient                       │
  └──────┬───────────────┘                       │
         │                                       │
-        │ 5. Streamable HTTP MCP Request        │
+        │ 5. MCP Streamable HTTP                │
         │    Authorization: Bearer <user_jwt>   │
         ▼                                       │
  ┌──────────────────────┐                       │
  │    springboot-sso    │                       │
  │       (:8080)        │                       │
  ├──────────────────────┤                       │
- │ • MCP Server         │ 6. Evaluate Security Context
- │ • @PreAuthorize      │    (Roles & Permissions of User)
+ │ • MCP Server         │ 6. @PreAuthorize evaluates
+ │ • @PreAuthorize      │    the caller's own roles
  └──────────────────────┘
 ```
 
----
-
-## 3. End-to-End Workflow
-
-1. **User Authentication**:
-   The user logs into `react-sso` via Keycloak using standard Authorization Code Flow with PKCE.
-2. **Context-Bound Request**:
-   When the user types a prompt in the React AI chat widget, the frontend sends an HTTP POST request to `videoclub-agent`:
-   ```http
-   POST /api/agent/chat
-   Host: localhost:8085 (or via Gateway :9500)
-   Authorization: Bearer eyJhbGciOiJSUzI1Ni...
-   Content-Type: application/json
-
-   {
-     "prompt": "¿Quiénes son los socios registrados?"
-   }
-   ```
-3. **Resource Server Validation**:
-   `videoclub-agent` acts as an **OAuth2 Resource Server**, validating the token signature against Keycloak's JWKS endpoint.
-4. **Token Relay into MCP**:
-   During the Streamable HTTP MCP handshake and tool calls to `springboot-sso` (`http://localhost:8080/mcp`), the agent passes the **exact same Bearer token** received from the user.
-5. **Enforcing Least Privilege**:
-   * If an **Admin** asks for movies and socios, `springboot-sso` allows both MCP tools.
-   * If a **Regular User** asks for socio records, the `@PreAuthorize` on the tool throws
-     `AccessDeniedException`.
-   * The agent gracefully explains to the user: *"You do not have permission to view member records."*
-
-> **How the denial actually travels — it is not an HTTP 403.** `AccessDeniedException` is a
-> `RuntimeException`, and Spring AI's `SyncStatelessMcpToolMethodCallback` catches `RuntimeException`
-> and converts it into `createSyncErrorResult(e)` — a `CallToolResult` flagged `isError`, carried
-> inside a normal **HTTP 200** JSON-RPC response. The MCP endpoint itself already authenticated the
-> request, so the transport call succeeds; only the *tool* fails.
->
-> This is what makes the graceful explanation in the last bullet possible: the denial reaches the LLM
-> as tool output it can read and paraphrase. A real 403 would abort the call before the model ever
-> saw it. Do not write client code that switches on a `403` status here — there is none.
+The gateway needs no `TokenRelay=` filter. That filter relays the token of an
+`OAuth2AuthorizedClient` held by the gateway, which would require the gateway to be an OAuth2
+*client* with a user session — it is not configured as one. React sends the `Authorization` header
+itself and Spring Cloud Gateway forwards request headers by default.
 
 ---
 
-## 4. Required Changes in `videoclub-agent`
+## 3. The two identities
 
-### A. Deprecate Credentials in `.env`
-Remove:
-```diff
-- KEYCLOAK_USERNAME=usuarioadmin
-- KEYCLOAK_PASSWORD=usuarioadmin
+One MCP transport carries requests made under two different identities. Keeping them apart is the
+core of this design.
+
+| | Identity | Used for | Where it comes from |
+|---|---|---|---|
+| **Relay path** | the human who made the HTTP request | every `tools/call` | `SecurityContextHolder` → `JwtAuthenticationToken` |
+| **Bootstrap path** | `service-account-videoclub-backend` | one `initialize()` handshake at startup | `client_credentials` grant |
+
+### Why a bootstrap identity is needed at all
+
+`/mcp` in `springboot-sso` ends its chain with `anyRequest().authenticated()`, so the MCP handshake
+needs *some* token. At startup there is no HTTP request, therefore no `SecurityContext`, therefore
+no user. Without a bootstrap credential the handshake returns 401.
+
+### Why the bootstrap identity has no permissions
+
+The service account only has to satisfy `anyRequest().authenticated()`. `initialize()` and
+`tools/list` are MCP protocol operations; the `@PreAuthorize` checks live on the **tool methods**,
+which are reached only by `tools/call`. Startup discovery therefore works with zero business roles —
+confirmed in practice: the agent discovers all 5 tools at boot while
+`service-account-videoclub-backend` holds no `movie-permission-read` and no `socio-permission-read`.
+
+**This is a requirement, not a coincidence. Do not grant that service account business roles.** In
+the realm those permissions are client roles of `videoclub-frontend`, assigned through the
+`administrador` and `cliente` groups; `videoclub-backend` declares `"roles": []`. Granting them
+would recreate the shared privileged identity this whole design removed.
+
+Note also that `KeycloakGrantedAuthoritiesConverter` in `springboot-sso` flattens **every** client
+entry in `resource_access` into authorities, so roles added to a service account for one purpose
+become authorities everywhere. Another reason to leave that client empty.
+
+### The discovery window
+
+`McpClientConfiguration` opens the bootstrap path for exactly one moment:
+
+```java
+final AtomicBoolean discoveryWindow = new AtomicBoolean(true);
+// ...
+.httpRequestCustomizer((builder, method, uri, body, ctx) -> {
+    final String token = discoveryWindow.get()
+            ? tokenRelayService.getDiscoveryToken()
+            : tokenRelayService.getUserBearerToken();
+    builder.header("Authorization", "Bearer " + token);
+})
+// ...
+try {
+    client.initialize();
+} catch (Exception e) {
+    log.warn(...);
+} finally {
+    discoveryWindow.set(false);
+}
 ```
 
-Remove the same two keys from **`.env.example`**, which is the tracked file and currently ships the
-real development credentials as its placeholder values. Drop the matching
-`videoclub.keycloak.username` / `videoclub.keycloak.password` defaults from `application.yml` as
-well, otherwise the values survive in the image even with an empty `.env`.
+The window is open only while the `@Bean` is being created. No HTTP endpoint is serving yet, so no
+user request can pass through it, and the `finally` closes it permanently before the context
+finishes refreshing.
 
-### B. Add Spring Security Resource Server Dependency
-In `pom.xml`:
-```xml
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-security</artifactId>
-</dependency>
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
-</dependency>
+`getUserBearerToken()` **throws** when the `SecurityContext` holds no JWT. It does not fall back:
+
+```java
+throw new IllegalStateException(
+        "No authenticated JWT in the SecurityContext; refusing to call MCP tools without a "
+        + "caller identity. MCP tool calls must run under the user's own token.");
 ```
 
-### C. Configure Resource Server in `application.yml`
+An earlier revision did fall back to the service account whenever no user was present. That made the
+agent's effective identity depend on a condition no caller could observe — any code path running off
+the servlet thread would have executed tools as the service account. It was harmless only because
+that account holds no business roles, which is a configuration accident rather than a guarantee.
+Failing closed makes the guarantee structural.
+
+### Tool discovery is lazy, and that is the recovery path
+
+`SyncMcpToolCallbackProvider` (spring-ai-mcp 2.0.1) caches its callbacks in `cachedToolCallbacks` and
+re-issues `tools/list` only when `invalidateCache` is set by an `McpToolsChangedEvent`. `AgentService`
+deliberately does **not** capture `ToolCallback[]` in its constructor, so the cache is populated by
+the first user request — under that user's own token.
+
+The consequence is a useful one: a failed startup handshake is not fatal. If Keycloak or the MCP
+server is unreachable at boot, the warning is logged, the window closes, and the first authenticated
+request establishes the session as the user.
+
+---
+
+## 4. How a permission denial travels
+
+It is **not** an HTTP 403.
+
+`AccessDeniedException` is a `RuntimeException`, and Spring AI's `SyncStatelessMcpToolMethodCallback`
+catches `RuntimeException` and converts it into `createSyncErrorResult(e)` — a `CallToolResult`
+flagged `isError`, carried inside a normal **HTTP 200** JSON-RPC response. The MCP endpoint itself
+already authenticated the request; only the *tool* failed.
+
+This is what makes a graceful answer possible: the denial reaches the LLM as tool output it can read
+and paraphrase. A real 403 would abort the call before the model ever saw it.
+
+**Do not write client code that switches on a 403 here — there is none.**
+
+---
+
+## 5. Configuration reference
+
+`application.yml`:
+
 ```yaml
 spring:
   security:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: http://localhost:9091/realms/videoclub
-          jwk-set-uri: http://localhost:9091/realms/videoclub/protocol/openid-connect/certs
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:9091/realms/videoclub}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:9091/realms/videoclub/protocol/openid-connect/certs}
 ```
 
-`springboot-sso` declares both properties, and this service should match. With `issuer-uri` alone,
-startup performs OIDC discovery and therefore **fails if Keycloak is not already running**; the
-explicit `jwk-set-uri` removes that startup coupling. Note also that the `iss` claim in the incoming
-token must match `issuer-uri` exactly — a token minted through a different hostname (for example
-`host.docker.internal`) will be rejected.
+Both properties are set on purpose. With `issuer-uri` alone, startup performs OIDC discovery and
+fails when Keycloak is not already running; the explicit `jwk-set-uri` removes that coupling.
 
-### D. Token Propagation Mechanism
-Replace `KeycloakTokenService` with a request-scoped token extractor:
-```java
-@Component
-public class RequestTokenHolder {
-    public String getBearerToken() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth instanceof JwtAuthenticationToken jwtAuth) {
-            return jwtAuth.getToken().getTokenValue();
-        }
-        return null;
-    }
-}
-```
+The `iss` claim of an incoming token must match `issuer-uri` exactly. A token minted through a
+different hostname — `host.docker.internal`, for instance — is rejected.
 
-The MCP Client customizer then dynamically grabs the token from the active HTTP request context rather than requesting a static token from Keycloak.
+`SecurityConfiguration` permits `/api/agent/health` anonymously, requires authentication on
+`/api/agent/chat` and `/api/agent/tools`, and ends with `anyRequest().authenticated()` so endpoints
+added later fail closed.
 
-This extractor works: `AgentService.chat()` calls `chatClient.prompt()...call()` synchronously, so
-tool execution happens on the servlet request thread and the thread-local `SecurityContextHolder` is
-visible to the transport customizer.
+---
 
-#### ⚠️ Swapping the customizer alone is not enough
+## 6. Verification
 
-The current MCP client is wired entirely at **startup**, before any user request exists:
+Run against a live stack (Keycloak, `springboot-sso`, the gateway and the agent all up). Every call
+goes through the gateway on `:9500`, which is what proves the route forwards the header.
 
-```java
-// McpClientConfiguration — inside the @Bean factory method
-client.initialize();                                  // handshake at boot
-
-// AgentService — inside the CONSTRUCTOR
-final ToolCallback[] toolCallbacks = toolCallbackProvider.getToolCallbacks();
-this.chatClient = chatClientBuilder
-        .defaultTools((Object[]) toolCallbacks)       // frozen for the lifetime of the bean
-        .build();
-```
-
-At boot there is no HTTP request, therefore no `SecurityContext`, therefore no bearer token. The MCP
-endpoint in `springboot-sso` is not anonymous — its `SecurityConfiguration` ends in
-`anyRequest().authenticated()` — so both `initialize()` and `tools/list` return **401**. The startup
-handshake failure is already swallowed by a `log.warn`, so the service still boots, but
-`getToolCallbacks()` yields nothing and the frozen `defaultTools(...)` array leaves the agent with
-**zero tools for the entire life of the process**. The symptom is an agent that answers every
-question from the model's own knowledge and never calls the VideoClub at all.
-
-There is a real tension here the rest of this document must not gloss over: **tool discovery needs
-some credential even after user credentials are removed.** Two viable resolutions:
-
-| Option | How it works | Trade-off |
+| Check | Expected | Observed |
 |---|---|---|
-| **Per-request MCP client** | Build the transport, discover tools, and run the call inside the request scope, using the caller's token throughout. | Highest fidelity: discovery itself is authorized as the user. Costs one handshake per request unless pooled. |
-| **Split discovery from execution** | Keep a narrow `client_credentials` service account (not ROPC, not a human user) solely for `initialize()`/`tools/list` at boot; relay the user's token on every `tools/call`. | Keeps startup cheap, but reintroduces a stored secret — a client secret rather than a user password, which is the acceptable half of the trade. |
+| `GET /api/agent/health` without token | 200 | 200 |
+| `POST /api/agent/chat` without token | 401 | 401 |
+| `GET /api/agent/tools` without token | 401 | 401 |
+| `GET /api/agent/tools` with any valid token | 5 tools | `get_movie`, `list_movies`, `search_movies`, `get_socio`, `list_socios` |
+| Chat as `usuarioadmin`: *"Listá los socios registrados"* | member list returned | full member registry returned |
+| Chat as `usuariocliente`: *"Listá los socios registrados"* | denial explained in prose, HTTP 200 | *"no tengo acceso a la información sobre los socios registrados"* |
+| Chat as `usuariocliente`: *"¿Qué películas hay?"* | catalog returned | catalog returned |
 
-Either way, `AgentService` must stop capturing `ToolCallback[]` in its constructor. Whichever option
-is chosen has to be decided **before** implementation starts, because it determines the bean scopes
-of `McpClientConfiguration`, `AgentService`, and the `ChatClient`.
+The last two rows together are the real proof: the same agent, two identities, two outcomes.
 
-### E. Gateway Routing & CORS
-Route agent calls through the Spring Cloud Gateway (`:9500`), which `react-sso` already uses as its
-base URL (`VITE_API_BASE_URL=http://localhost:9500`).
+A response of **0 tools** would mean the MCP session was never established — check the startup log
+for the handshake warning and the service account's client secret.
 
-**CORS needs no new work.** The gateway config (`docker/gateway/gateway.yml` in the `springboot-sso`
-repository) already declares a global policy covering every route:
+---
+
+## 7. Known open issue
+
+The Keycloak client secret for `videoclub-backend` is still committed to the repository, as a
+default value in `application.yml` and as a literal in the tracked `.env.example`:
 
 ```yaml
-globalcors:
-  cors-configurations:
-    '[/**]':
-      allowedOriginPatterns: "*"
-      allowedMethods: "*"
-      allowedHeaders: "*"
-      allowCredentials: true
+client-secret: ${KEYCLOAK_CLIENT_SECRET:dstNSsANvqlaGfZCJa1mcYzP1EBAYP4N}
 ```
 
-Adding a CORS filter on `:8085` is only necessary if the frontend is pointed straight at the agent,
-bypassing the gateway — which this design does not do.
+This is the same defect that made the ROPC credentials unacceptable — a working secret surviving in
+the image even with an empty `.env` — with a machine credential instead of a human one. Swapping a
+user password for a client secret is the acceptable half of that trade; committing it is not.
+
+The fix is to drop the default so startup fails without the variable, put a placeholder in
+`.env.example`, and rotate the secret in Keycloak, since it is present from the first commit onward.

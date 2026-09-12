@@ -22,9 +22,32 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Manages JWT tokens for downstream MCP calls.
- * 1. Propagates the caller's JWT if an active HTTP request context exists (Token Relay).
- * 2. Falls back to a service account token via client_credentials for startup tool discovery.
+ * Resolves the bearer tokens used for outbound MCP calls to {@code springboot-sso}.
+ *
+ * <p>There are exactly two callers, and they are deliberately kept apart:
+ *
+ * <ul>
+ *   <li>{@link #getUserBearerToken()} — the Token Relay path. Returns the JWT of the human who
+ *       issued the current HTTP request, so every {@code tools/call} is authorized as that person
+ *       and {@code @PreAuthorize} on the MCP tools evaluates their real roles.</li>
+ *   <li>{@link #getDiscoveryToken()} — the bootstrap path. A {@code client_credentials} token for
+ *       the {@code videoclub-backend} service account, used only for the MCP {@code initialize()}
+ *       handshake at startup, when no HTTP request and therefore no user identity exists yet.</li>
+ * </ul>
+ *
+ * <h2>Why there is no fallback between them</h2>
+ *
+ * <p>An earlier revision had {@code getBearerToken()} silently fall back to the service account
+ * whenever the {@code SecurityContext} held no {@link JwtAuthenticationToken}. That made the agent's
+ * identity depend on a condition no caller could see: any code path running off the servlet thread
+ * would have executed tools as the service account instead of as the user, which is precisely the
+ * shared-privileged-identity problem the Token Relay pattern exists to remove.
+ *
+ * <p>It happened to be harmless only because {@code service-account-videoclub-backend} holds no
+ * {@code movie-permission-read} or {@code socio-permission-read} client role in the realm — an
+ * accident of configuration, not a guarantee. {@link #getUserBearerToken()} now throws instead, so
+ * a missing user identity fails the call rather than quietly downgrading it. Granting business
+ * roles to that service account must stay unnecessary; see {@code docs/sso-token-propagation.md}.
  */
 @Service
 public class TokenRelayService {
@@ -37,8 +60,8 @@ public class TokenRelayService {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    private String cachedServiceToken;
-    private Instant serviceTokenExpiresAt = Instant.MIN;
+    private String cachedDiscoveryToken;
+    private Instant discoveryTokenExpiresAt = Instant.MIN;
 
     public TokenRelayService(
             @Value("${videoclub.keycloak.token-url}") final String tokenUrl,
@@ -54,27 +77,36 @@ public class TokenRelayService {
     }
 
     /**
-     * Resolves the token to use for downstream MCP calls:
-     * - Returns the active user's JWT from SecurityContextHolder if present.
-     * - Falls back to the cached service account token.
+     * Returns the caller's JWT so it can be relayed to the MCP server.
+     *
+     * @return the raw token value of the authenticated user
+     * @throws IllegalStateException if the current {@code SecurityContext} holds no authenticated
+     *                               JWT. Failing here is intentional: the alternative is executing
+     *                               someone else's tool call under a different identity.
      */
-    public String getBearerToken() {
+    public String getUserBearerToken() {
         final Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth instanceof JwtAuthenticationToken jwtAuth) {
-            log.debug("Using user Bearer token from active SecurityContext: {}", jwtAuth.getName());
+            log.debug("Relaying bearer token of authenticated caller: {}", jwtAuth.getName());
             return jwtAuth.getToken().getTokenValue();
         }
 
-        log.debug("No user SecurityContext found. Falling back to service account client_credentials token");
-        return getServiceAccountToken();
+        throw new IllegalStateException(
+                "No authenticated JWT in the SecurityContext; refusing to call MCP tools without a "
+                + "caller identity. MCP tool calls must run under the user's own token.");
     }
 
     /**
-     * Retrieves or refreshes a service account JWT using client_credentials grant.
+     * Retrieves (or refreshes) the service account JWT used for the startup MCP handshake.
+     *
+     * <p>This token only needs to satisfy {@code anyRequest().authenticated()} on {@code /mcp}:
+     * {@code initialize()} and {@code tools/list} are protocol-level operations, while the
+     * {@code @PreAuthorize} checks live on the tool methods reached by {@code tools/call}. The
+     * service account therefore needs — and must keep — zero business permissions.
      */
-    public synchronized String getServiceAccountToken() {
-        if (cachedServiceToken != null && Instant.now().plusSeconds(30).isBefore(serviceTokenExpiresAt)) {
-            return cachedServiceToken;
+    public synchronized String getDiscoveryToken() {
+        if (cachedDiscoveryToken != null && Instant.now().plusSeconds(30).isBefore(discoveryTokenExpiresAt)) {
+            return cachedDiscoveryToken;
         }
 
         try {
@@ -107,16 +139,16 @@ public class TokenRelayService {
             }
 
             final JsonNode root = objectMapper.readTree(response.body());
-            this.cachedServiceToken = root.path("access_token").asText();
+            this.cachedDiscoveryToken = root.path("access_token").asText();
             final long expiresIn = root.path("expires_in").asLong(1800);
-            this.serviceTokenExpiresAt = Instant.now().plusSeconds(expiresIn);
+            this.discoveryTokenExpiresAt = Instant.now().plusSeconds(expiresIn);
 
             log.info("Service account JWT obtained successfully (expires in {}s)", expiresIn);
-            return this.cachedServiceToken;
+            return this.cachedDiscoveryToken;
 
         } catch (Exception e) {
             log.error("Error obtaining service account JWT from Keycloak: {}", e.getMessage(), e);
-            throw new RuntimeException("Could not authenticate service account with Keycloak: " + e.getMessage(), e);
+            throw new IllegalStateException("Could not authenticate service account with Keycloak: " + e.getMessage(), e);
         }
     }
 }

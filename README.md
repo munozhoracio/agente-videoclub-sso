@@ -15,14 +15,19 @@ Spring Boot 4 + Spring AI microservice that acts as an intelligent assistant for
 
 ## Documentation
 
-* [Frontend Integration & Token Relay Architecture](./docs/sso-token-propagation.md)
-* [Next Iteration Roadmap](./docs/next-iteration-plan.md)
+* [SSO Token Propagation (Token Relay) — implemented architecture](./docs/sso-token-propagation.md)
+* [Gateway Integration, Token Relay & React Chat Tab (as built)](./docs/gateway-agent-integration.md)
 * [HTTP Client Testing Skill](../springboot-sso/.agents/skills/http-client/SKILL.md)
 
 ---
 
-## Planned for Next Iteration
+## Integration Status
 
-1. Expose `/api/agent/**` through Spring Cloud Gateway (`:9500`).
-2. Remove hardcoded credentials from `.env` and implement dynamic Bearer Token Relay.
-3. Add a dedicated **Asistente AI** tab in the `react-sso` frontend.
+All three integration goals are implemented and verified end-to-end:
+
+1. `/api/agent/**` is exposed through Spring Cloud Gateway (`:9500`).
+2. Hardcoded user credentials are gone; the caller's Bearer token is relayed into the MCP tools.
+3. The **Asistente AI** tab ships in the `react-sso` frontend.
+
+Open follow-ups are tracked in
+[gateway-agent-integration.md §7](./docs/gateway-agent-integration.md).

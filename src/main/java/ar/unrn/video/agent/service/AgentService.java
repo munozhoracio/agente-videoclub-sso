@@ -3,8 +3,11 @@ package ar.unrn.video.agent.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -12,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 @Service
 public class AgentService {
@@ -28,16 +32,24 @@ public class AgentService {
         this.toolCallbackProvider = toolCallbackProvider;
     }
 
+    public record ChatResult(String response, List<String> toolsExecuted, List<String> toolsAvailable) {}
+
     /**
      * Executes conversational agent with user prompt, injecting tools dynamically
-     * and enriching system prompt with caller's identity.
+     * and tracking which tools were executed during this turn.
      */
-    public String chat(final String userPrompt) {
+    public ChatResult chat(final String userPrompt) {
         log.info("Agent received prompt: {}", userPrompt);
 
-        final ToolCallback[] toolCallbacks = toolCallbackProvider.getToolCallbacks();
-        log.debug("Active tools available for execution: {}",
-                Arrays.stream(toolCallbacks).map(t -> t.getToolDefinition().name()).toList());
+        final List<String> toolsExecuted = new CopyOnWriteArrayList<>();
+        final ToolCallback[] availableCallbacks = toolCallbackProvider.getToolCallbacks();
+        final List<String> availableToolNames = Arrays.stream(availableCallbacks)
+                .map(t -> t.getToolDefinition().name())
+                .toList();
+
+        final ToolCallback[] trackingCallbacks = Arrays.stream(availableCallbacks)
+                .map(cb -> new TrackingToolCallback(cb, toolsExecuted))
+                .toArray(ToolCallback[]::new);
 
         String callerName = "Usuario";
         final Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -65,13 +77,13 @@ public class AgentService {
 
         final String response = chatClientBuilder.build().prompt()
                 .system(systemPrompt)
-                .tools((Object[]) toolCallbacks)
+                .tools((Object[]) trackingCallbacks)
                 .user(userPrompt)
                 .call()
                 .content();
 
-        log.debug("Agent response: {}", response);
-        return response;
+        log.info("Agent response generated. Tools executed: {}", toolsExecuted);
+        return new ChatResult(response, toolsExecuted, availableToolNames);
     }
 
     /**
@@ -81,5 +93,46 @@ public class AgentService {
         return Arrays.stream(toolCallbackProvider.getToolCallbacks())
                 .map(t -> t.getToolDefinition().name())
                 .toList();
+    }
+
+    /**
+     * Decorator that intercepts tool invocations to track executed tool names.
+     */
+    private static class TrackingToolCallback implements ToolCallback {
+        private final ToolCallback delegate;
+        private final List<String> executedTools;
+
+        TrackingToolCallback(final ToolCallback delegate, final List<String> executedTools) {
+            this.delegate = delegate;
+            this.executedTools = executedTools;
+        }
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return delegate.getToolDefinition();
+        }
+
+        @Override
+        public ToolMetadata getToolMetadata() {
+            return delegate.getToolMetadata();
+        }
+
+        @Override
+        public String call(final String toolInput) {
+            final String toolName = delegate.getToolDefinition().name();
+            if (!executedTools.contains(toolName)) {
+                executedTools.add(toolName);
+            }
+            return delegate.call(toolInput);
+        }
+
+        @Override
+        public String call(final String toolInput, final ToolContext toolContext) {
+            final String toolName = delegate.getToolDefinition().name();
+            if (!executedTools.contains(toolName)) {
+                executedTools.add(toolName);
+            }
+            return delegate.call(toolInput, toolContext);
+        }
     }
 }
