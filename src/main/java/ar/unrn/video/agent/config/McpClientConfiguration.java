@@ -1,6 +1,6 @@
 package ar.unrn.video.agent.config;
 
-import ar.unrn.video.agent.auth.KeycloakTokenService;
+import ar.unrn.video.agent.auth.TokenRelayService;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -21,7 +21,7 @@ public class McpClientConfiguration {
     @Bean(destroyMethod = "close")
     public McpSyncClient mcpSyncClient(
             @Value("${videoclub.mcp.url}") final String mcpUrl,
-            final KeycloakTokenService tokenService) {
+            final TokenRelayService tokenRelayService) {
 
         log.info("Configuring MCP Sync Client for VideoClub at {}", mcpUrl);
 
@@ -29,8 +29,10 @@ public class McpClientConfiguration {
                 .builder(mcpUrl)
                 .connectTimeout(Duration.ofSeconds(10))
                 .httpRequestCustomizer((builder, method, uri, body, ctx) -> {
-                    final String token = tokenService.getAccessToken();
-                    builder.header("Authorization", "Bearer " + token);
+                    final String token = tokenRelayService.getBearerToken();
+                    if (token != null && !token.isBlank()) {
+                        builder.header("Authorization", "Bearer " + token);
+                    }
                 })
                 .build();
 
