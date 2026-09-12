@@ -1,0 +1,76 @@
+# VideoClub AI Agent - MCP Testing Suite
+# Compatible con VS Code REST Client (Antigravity IDE) e IntelliJ HTTP Client
+
+@host = localhost
+@port = 8085
+@base_url = http://{{host}}:{{port}}
+
+# ====================================================================
+# 1. Diagnóstico del Agente
+# ====================================================================
+
+###
+# @name agent_health
+# Health Check del Microservicio
+GET {{base_url}}/api/agent/health
+Accept: application/json
+
+###
+# @name agent_list_tools
+# Descubrimiento de Herramientas MCP registradas en springboot-sso (:8080)
+GET {{base_url}}/api/agent/tools
+Accept: application/json
+
+# ====================================================================
+# 2. Pruebas de Invocación de Tools vía Chat LLM (OpenAI)
+# ====================================================================
+
+###
+# @name agent_chat_list_movies
+# Caso 1: El agente debe decidir invocar 'list_movies'
+POST {{base_url}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "prompt": "¿Qué películas tienen disponibles actualmente en el catálogo del VideoClub?"
+}
+
+###
+# @name agent_chat_search_movie
+# Caso 2: El agente debe decidir invocar 'search_movies' con query de búsqueda
+POST {{base_url}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "prompt": "¿Tienen alguna película que contenga la palabra 'blade' o 'matrix' en su título?"
+}
+
+###
+# @name agent_chat_get_movie_by_id
+# Caso 3: El agente debe decidir invocar 'get_movie' pasando el id
+POST {{base_url}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "prompt": "¿Podrías darme la información de la película con ID 10001?"
+}
+
+###
+# @name agent_chat_list_socios
+# Caso 4: El agente debe invocar 'list_socios'
+POST {{base_url}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "prompt": "¿Quiénes son los socios registrados en el videoclub y cuál es su estado?"
+}
+
+###
+# @name agent_chat_get_socio_by_id
+# Caso 5: El agente debe invocar 'get_socio'
+POST {{base_url}}/api/agent/chat
+Content-Type: application/json
+
+{
+  "prompt": "¿Me pasás los datos del socio con ID 10018?"
+}

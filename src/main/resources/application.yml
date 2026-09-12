@@ -1,0 +1,34 @@
+server:
+  port: ${PORT:8085}
+
+spring:
+  application:
+    name: videoclub-agent
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:9091/realms/videoclub}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:9091/realms/videoclub/protocol/openid-connect/certs}
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:demo-key}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:gpt-4o-mini}
+          temperature: 0.2
+
+videoclub:
+  mcp:
+    url: ${VIDEOCLUB_MCP_URL:http://localhost:8080/mcp}
+  keycloak:
+    token-url: ${KEYCLOAK_TOKEN_URL:http://localhost:9091/realms/videoclub/protocol/openid-connect/token}
+    client-id: ${KEYCLOAK_CLIENT_ID:videoclub-backend}
+    client-secret: ${KEYCLOAK_CLIENT_SECRET:dstNSsANvqlaGfZCJa1mcYzP1EBAYP4N}
+
+logging:
+  level:
+    ar.unrn.video.agent: DEBUG
+    org.springframework.security: INFO
+    org.springframework.ai: INFO
+    io.modelcontextprotocol: INFO
