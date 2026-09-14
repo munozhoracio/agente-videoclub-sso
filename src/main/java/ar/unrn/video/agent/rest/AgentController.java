@@ -28,7 +28,8 @@ public class AgentController {
             String response,
             List<String> agentsInvoked,
             List<String> toolsExecuted,
-            List<String> toolsAvailable) {}
+            List<String> toolsAvailable,
+            boolean fromMemory) {}
 
     @PostMapping(value = "/chat", consumes = "application/json", produces = "application/json")
     public ResponseEntity<?> chat(@RequestBody(required = false) final ChatRequest request) {
@@ -47,7 +48,8 @@ public class AgentController {
                     result.response(),
                     result.agentsInvoked(),
                     result.toolsExecuted(),
-                    result.toolsAvailable()
+                    result.toolsAvailable(),
+                    result.fromMemory()
             ));
         } catch (IllegalStateException e) {
             log.error("Domain tool or authentication state error in chat: {}", e.getMessage());

@@ -51,7 +51,8 @@ public class AgentService {
             String conversationId,
             List<String> agentsInvoked,
             List<String> toolsExecuted,
-            List<String> toolsAvailable
+            List<String> toolsAvailable,
+            boolean fromMemory
     ) {}
 
     /**
@@ -67,6 +68,8 @@ public class AgentService {
 
         // If this conversation memory is brand new, seed it with the user's presentation
         seedInitialMemoryIfEmpty(conversationId, user);
+
+        final int historySizeBeforeTurn = chatMemory.get(conversationId).size();
 
         final ExecutionTracker tracker = new ExecutionTracker();
         final OrchestratorTools orchestratorTools = new OrchestratorTools(
@@ -110,11 +113,12 @@ public class AgentService {
         final List<String> agentsInvoked = tracker.getAgentsInvoked();
         final List<String> toolsExecuted = tracker.getToolsExecuted();
         final List<String> toolsAvailable = getAvailableToolNames();
+        final boolean fromMemory = historySizeBeforeTurn > 2 && toolsExecuted.isEmpty() && agentsInvoked.isEmpty();
 
-        log.info("Turn completed for conversationId: {}. Agents: {}, Tools: {}",
-                conversationId, agentsInvoked, toolsExecuted);
+        log.info("Turn completed for conversationId: {}. Agents: {}, Tools: {}, FromMemory: {}",
+                conversationId, agentsInvoked, toolsExecuted, fromMemory);
 
-        return new ChatResult(response, conversationId, agentsInvoked, toolsExecuted, toolsAvailable);
+        return new ChatResult(response, conversationId, agentsInvoked, toolsExecuted, toolsAvailable, fromMemory);
     }
 
     /**
