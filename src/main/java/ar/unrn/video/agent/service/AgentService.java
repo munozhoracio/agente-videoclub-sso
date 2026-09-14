@@ -89,6 +89,7 @@ public class AgentService {
                 + "- Recordá y utilizá las respuestas anteriores de esta conversación para responder de forma coherente. "
                 + "- Para saludos de cortesía, presentaciones o preguntas generales sobre qué podés hacer, respondé directamente con amabilidad sin invocar a ningún sub-agente. "
                 + "- REGLA CRÍTICA DE DELEGACIÓN: Los sub-agentes NO tienen acceso a la memoria conversacional. Cada vez que invoques una herramienta de delegación, debés REFORMULAR la consulta de manera completamente AUTO-CONTENIDA, resolviendo pronombres, referencias implícitas y anáforas previas del historial. "
+                + "- PRESERVACIÓN DE ARTEFACTOS GENERATIVE UI: Si la respuesta de un sub-agente incluye un bloque estructurado delimitado (por ejemplo ```json:movies [...] ```), debés PRESERVAR intacto ese bloque al final. NUNCA dupliques ni repitas en viñetas los datos o fichas de las películas en tu texto (sin listas de título, precio, género o imágenes), ya que el frontend monta las tarjetas interactivas automáticamente. Tu texto debe ser solo una introducción breve, natural y amigable. "
                 + "- Si una consulta requiere ambos dominios, podés invocar a ambos sub-agentes y consolidar una respuesta integrada. "
                 + "- Respondé siempre en español de forma clara, natural, profesional y precisa.",
                 user.fullName(), user.username(), user.email(), user.roles()
