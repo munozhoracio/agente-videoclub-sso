@@ -83,6 +83,8 @@ public class McpClientConfiguration {
 
     @Bean
     public SyncMcpToolCallbackProvider mcpToolCallbackProvider(final McpSyncClient mcpSyncClient) {
-        return new SyncMcpToolCallbackProvider(mcpSyncClient);
+        return SyncMcpToolCallbackProvider.builder()
+                .mcpClients(mcpSyncClient)
+                .build();
     }
 }

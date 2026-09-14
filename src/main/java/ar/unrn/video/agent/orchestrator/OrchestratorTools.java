@@ -32,9 +32,12 @@ public class OrchestratorTools {
         this.callerName = callerName;
     }
 
-    @Tool(description = "Delegates inquiries about the movie catalog, film genres, movie search, availability, stock or titles to the specialized Catalog Agent.")
+    @Tool(description = "Delegates any operation related to the movie catalog to the specialized Catalog Agent. "
+            + "Use this for: searching movies, listing the catalog, checking genres, availability or stock, "
+            + "AND ALSO for creating, registering or adding new movies to the catalog. "
+            + "If the user wants to create or add a movie, always delegate here.")
     public String consultCatalogAgent(
-            @ToolParam(description = "Self-contained query about movies or catalog, explicitly resolving any pronouns, anaphora or prior conversational references") final String query) {
+            @ToolParam(description = "Self-contained query or instruction about movies or catalog, explicitly resolving any pronouns, anaphora or prior conversational references") final String query) {
         log.info("Orchestrator delegating to CatalogSubAgent with query: {}", query);
         return catalogSubAgent.execute(query, tracker, callerName);
     }
