@@ -25,32 +25,25 @@ Spring Boot 4 + Spring AI microservice that acts as an intelligent assistant for
 
 El agente se integra al ecosistema de microservicios compartiendo la red Docker **`videoclub_default`** creada por `springboot-sso/docker/services.yaml`.
 
-```text
-[ Browser / React SPA ]
-         │
-         │  http://localhost:9500 (Gateway)
-         ▼
-┌────────────────── Docker Network: videoclub_default ──────────────────┐
-│                                                                       │
-│   ┌───────────────────────────┐         ┌─────────────────────────┐   │
-│   │    videoclub-gateway      │────────▶│      agent (:8085)      │   │
-│   │  (Spring Cloud Gateway)   │         │    (videoclub-agent)    │   │
-│   └─────────────┬─────────────┘         └────────────┬────────────┘   │
-│                 │                                    │                │
-│                 │                                    │                │
-│                 ▼                                    ▼                │
-│   ┌───────────────────────────┐         ┌─────────────────────────┐   │
-│   │     video-keycloak        │◀────────│     Keycloak Calls      │   │
-│   │   (keycloak:8080)         │  JWKS & │  - JWK Set (certs)      │   │
-│   │   iss: localhost:9091     │  Token  │  - Service Token        │   │
-│   └───────────────────────────┘         └─────────────────────────┘   │
-└─────────────────┼────────────────────────────────────┼────────────────┘
-                  │ (host.docker.internal:8080)        │ (host.docker.internal:8080/mcp)
-                  ▼                                    ▼
-┌───────────────────────────────────────────────────────────────────────┐
-│                      Host Machine (desarrollo)                        │
-│             springboot-sso (Backend & MCP Server :8080)               │
-└───────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Browser["Browser / React SPA"]
+
+    subgraph DockerNet["Docker Network: videoclub_default"]
+        Gateway["videoclub-gateway<br/>(Spring Cloud Gateway :9500)"]
+        Agent["agent (:8085)<br/>(videoclub-agent)"]
+        Keycloak["video-keycloak<br/>(keycloak:8080)<br/>iss: localhost:9091"]
+    end
+
+    subgraph Host["Host Machine (Desarrollo)"]
+        Backend["springboot-sso<br/>(Backend & MCP Server :8080)"]
+    end
+
+    Browser -->|"http://localhost:9500"| Gateway
+    Gateway -->|"Route /api/agent/**"| Agent
+    Gateway -->|"host.docker.internal:8080"| Backend
+    Agent -->|"JWKS & Token (keycloak:8080)"| Keycloak
+    Agent -->|"MCP Tools (host.docker.internal:8080/mcp)"| Backend
 ```
 
 ### Reglas de Comunicación
@@ -160,23 +153,28 @@ curl -s -X POST "http://localhost:9500/api/agent/chat" \
 
 El servicio implementa el patrón **Supervisor / Hierarchical Multi-Agent System**:
 
-```text
-               ┌───────────────────────────────┐
-               │    Agente Orquestador         │
-               │    (Supervisor / Router)      │
-               └───────────────┬───────────────┘
-                               │
-            ┌──────────────────┴──────────────────┐
-            │ Invoca sub-agentes como @Tool       │
-            ▼                                     ▼
-┌───────────────────────────────┐   ┌───────────────────────────────┐
-│   CatalogSubAgent             │   │   MembershipSubAgent          │
-│   (ChatClient con prompt de   │   │   (ChatClient con prompt de   │
-│    experto en catálogo)       │   │    experto en membresías)     │
-└───────────────┬───────────────┘   └───────────────┬───────────────┘
-                │ Solo MCP de Catálogo              │ Solo MCP de Socios
-                ▼                                   ▼
-   [ list_movies, get_movie, ... ]      [ get_socio, list_socios ]
+```mermaid
+flowchart TD
+    Client["Cliente / Frontend (:9500)"] -->|"Prompt + Token + conversationId"| Supervisor["Agente Orquestador<br/>(Supervisor / Router - AgentService)"]
+
+    subgraph StateManagement["Gestión de Estado y Memoria"]
+        Memory[("ChatMemory<br/>(Historial por conversación)")] <--> Supervisor
+        Tracker["ExecutionTracker<br/>(Auditoría: agentes y tools)"] <--> Supervisor
+    end
+
+    Supervisor -->|"@Tool consultCatalogAgent"| CatalogSubAgent["CatalogSubAgent<br/>(ChatClient experto en catálogo)"]
+    Supervisor -->|"@Tool consultMembershipAgent"| MembershipSubAgent["MembershipSubAgent<br/>(ChatClient experto en membresías)"]
+
+    subgraph MCPCatalog["Herramientas MCP de Catálogo"]
+        ToolsCatalog["list_movies<br/>get_movie<br/>search_movies"]
+    end
+
+    subgraph MCPMembership["Herramientas MCP de Socios"]
+        ToolsMembership["get_socio<br/>list_socios"]
+    end
+
+    CatalogSubAgent -->|"Ejecuta solo herramientas de películas"| ToolsCatalog
+    MembershipSubAgent -->|"Ejecuta solo herramientas de socios"| ToolsMembership
 ```
 
 ### Componentes:
