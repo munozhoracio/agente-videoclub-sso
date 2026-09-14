@@ -1,0 +1,8 @@
+target/
+.git/
+.idea/
+*.iml
+.agents/
+.atl/
+.env
+.env.prod

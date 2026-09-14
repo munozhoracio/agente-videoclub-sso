@@ -34,6 +34,10 @@ build/
 
 ### Environment files ###
 .env
+.env.*
 !.env.example
+!.env.template
+!.env.prod.template
+
 # Local Pi runtime state
 .atl/

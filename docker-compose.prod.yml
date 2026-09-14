@@ -1,0 +1,30 @@
+# Entorno PRODUCTIVO. Se levanta explicitamente con -f y su propio archivo de variables:
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+#
+# `name: videoclub-prod` aisla el stack productivo en un namespace propio.
+name: videoclub-prod
+
+services:
+    agent:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: runtime
+        image: videoclub-agent:${APP_VERSION}
+        container_name: videoclub-agent-prod
+        ports:
+            - ${PORT}:${PORT}
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        environment:
+            PORT: ${PORT}
+            STAGE: ${STAGE}
+            OPENAI_API_KEY: ${OPENAI_API_KEY}
+            OPENAI_MODEL: ${OPENAI_MODEL}
+            VIDEOCLUB_MCP_URL: ${VIDEOCLUB_MCP_URL}
+            KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI}
+            KEYCLOAK_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI}
+            KEYCLOAK_TOKEN_URL: ${KEYCLOAK_TOKEN_URL}
+            KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+            KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+        restart: always
