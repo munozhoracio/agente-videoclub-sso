@@ -26,35 +26,24 @@ model in depth.
 
 ## 2. Call flow
 
-```
-┌──────────────────────────────────────────────────────────┐
-│              Browser (React SPA :5173)                   │
-│   Tabs: [Catálogo] [Socios] [Usuarios] [🤖 Asistente AI] │
-└────────────────────────────┬─────────────────────────────┘
-                             │ POST /api/agent/chat
-                             │ Authorization: Bearer <user_jwt>
-                             ▼
-┌──────────────────────────────────────────────────────────┐
-│              Spring Cloud Gateway (:9500)                │
-│   Route: /api/agent/** -> host.docker.internal:8085      │
-│   Authorization header forwarded by default (no filter)  │
-└────────────────────────────┬─────────────────────────────┘
-                             ▼
-┌──────────────────────────────────────────────────────────┐
-│               videoclub-agent (:8085)                    │
-│   • Validates JWT via Keycloak JWKS                      │
-│   • Relays the caller's token into the MCP transport     │
-│   • OpenAI LLM decides which tools to invoke             │
-└────────────────────────────┬─────────────────────────────┘
-                             │ MCP Streamable HTTP
-                             │ Authorization: Bearer <user_jwt>
-                             ▼
-┌──────────────────────────────────────────────────────────┐
-│               springboot-sso (:8080)                     │
-│   • Executes the MCP tool in the caller's security ctx   │
-│   • @PreAuthorize evaluates the user's real roles        │
-│   • Denials arrive as tool errors inside HTTP 200        │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Browser["Browser (React SPA :5173)<br/>Tabs: [Catálogo] [Socios] [Usuarios] [🤖 Asistente AI]"]
+    Gateway["Spring Cloud Gateway (:9500)<br/>Route: /api/agent/** -> agent:8085<br/>(Authorization header forwarded by default)"]
+    
+    subgraph AgentSystem["videoclub-agent (:8085)"]
+        Supervisor["AgentService (Supervisor / Router)<br/>• Validates JWT via Keycloak JWKS<br/>• Preserves state via ChatMemory"]
+        SubAgents["Sub-Agentes Especializados<br/>• CatalogSubAgent (Películas)<br/>• MembershipSubAgent (Socios)"]
+        Relay["TokenRelayService<br/>Relays user JWT to MCP transport"]
+        Supervisor --> SubAgents
+        SubAgents --> Relay
+    end
+
+    Backend["springboot-sso (:8080)<br/>• Executes MCP tools in caller security context<br/>• @PreAuthorize evaluates user real roles<br/>• Denials arrive as tool errors inside HTTP 200"]
+
+    Browser -->|"POST /api/agent/chat<br/>Authorization: Bearer <user_jwt>"| Gateway
+    Gateway -->|"Internal Docker Network (videoclub_default)"| Supervisor
+    Relay -->|"MCP Streamable HTTP<br/>Authorization: Bearer <user_jwt>"| Backend
 ```
 
 ---
@@ -70,7 +59,7 @@ deployment — there is no code to compile.
 
 ```yaml
 - id: agent-service
-  uri: http://host.docker.internal:8085
+  uri: http://agent:8085
   predicates:
     - Path=/api/agent/**
   filters:
@@ -82,9 +71,10 @@ Three details that are easy to get wrong:
 1. **The YAML path is `spring.cloud.gateway.server.webflux.routes`**, not
    `spring.cloud.gateway.routes`. Every existing route in the file uses the longer form; the short
    form is silently ignored — no error, no route.
-2. **`uri` must be `host.docker.internal`, never `localhost`.** The gateway runs inside Docker, so
-   `localhost` resolves to the gateway container itself. Every other route uses
-   `host.docker.internal:8080` for the same reason.
+2. **`uri` uses internal Docker DNS (`http://agent:8085`), not `localhost`.** In the Docker Compose
+   network (`videoclub_default`), both the gateway and the agent share the network, so the service
+   name `agent` resolves directly to the container. (When running the agent on the host during
+   initial bare-metal development, `http://host.docker.internal:8085` was used).
 3. **No `TokenRelay=` filter.** That filter relays the access token of an `OAuth2AuthorizedClient`
    held by the gateway, which requires the gateway to be configured as an OAuth2 *client* with a
    user session — it has no `spring.security.oauth2.client` configuration at all. It is also
@@ -126,6 +116,34 @@ Swapping the transport customizer would not have fixed it. Two options were on t
 constructor, and the two identities are separated by an explicit discovery window rather than a
 fallback. The mechanics, and the reason the service account must keep zero business permissions,
 are in [`sso-token-propagation.md` §3](./sso-token-propagation.md).
+
+### Hierarchical multi-agent system & segregated tool calling
+
+Instead of exposing all MCP tools directly to a single generalist model, `videoclub-agent` adopts a
+**Hierarchical Multi-Agent (Supervisor) pattern**:
+- **`AgentService` (Supervisor / Router)**: Receives user queries, maintains conversation context,
+  handles general greetings without invoking tools, and routes domain-specific requests to
+  sub-agents via `@Tool` functions (`consultCatalogAgent`, `consultMembershipAgent`).
+- **`CatalogSubAgent`**: ChatClient specialized with a movie domain system prompt and filtered to
+  catalog tools (`list_movies`, `get_movie`, `search_movies`).
+- **`MembershipSubAgent`**: ChatClient specialized in membership and permissions, filtered to socio
+  tools (`get_socio`, `list_socios`).
+
+### Conversational memory & state management
+
+Multi-turn context is managed by Spring AI's `ChatMemory` and `MessageChatMemoryAdvisor`:
+- Sessions are keyed by `conversationId` sent from the client.
+- On turn 0, the user's name and email from Keycloak are seeded into memory via `UserProfile`, allowing
+  the assistant to recognize the user immediately.
+- A reset endpoint (`DELETE /api/agent/chat/memory?conversationId=...`) enables clearing session history
+  when the user starts a new conversation.
+
+### Observability with ExecutionTracker
+
+An `ExecutionTracker` bean records:
+- `agentsInvoked`: Which sub-agents were activated during the request.
+- `toolsExecuted`: Which underlying MCP tools were executed.
+These metadata fields are returned in the response payload for frontend transparency and debugging.
 
 ### Dependencies
 
@@ -172,6 +190,8 @@ The view reads the token from `react-oidc-context` (`auth.user?.access_token`) a
 `apiRequest`, which attaches the `Authorization` header. Calls go to `VITE_API_BASE_URL`
 (`http://localhost:9500`), never straight to `:8085`.
 
+The frontend maintains a dynamic `conversationId` (`session-${Date.now()}`). Clicking **"🔄 Nueva conversación"** calls `DELETE /api/agent/chat/memory` and resets the conversational state seamlessly.
+
 ---
 
 ## 6. Verification
@@ -201,9 +221,10 @@ passes.
   already covers. The gateway's `DedupeResponseHeader` filter hides the duplication, but it leaves
   the agent port open to any origin. Either remove it or narrow it to `http://localhost:5173`, as
   `springboot-sso` does.
-- **`AgentService.chat()` calls `chatClientBuilder.build()` on every request.** Harmless, but the
-  client can be built once.
 - **`AgentController` returns the raw exception message and class in its 500 response.** Internal
   detail reaching the browser.
-- **`AgentChatView.tsx` hardcodes the five tool names** in its welcome message; it will drift from
-  whatever the server actually exposes.
+- ~~**`AgentService.chat()` calls `chatClientBuilder.build()` on every request.**~~ **Resolved:**
+  `AgentService`, `CatalogSubAgent`, and `MembershipSubAgent` now configure pre-built, domain-scoped
+  `ChatClient` beans at startup with their respective advisors and tools.
+- ~~**`AgentChatView.tsx` hardcodes the five tool names.**~~ **Resolved:** Replaced with a dynamic
+  contextual greeting using the authenticated user's profile and conversational memory management.

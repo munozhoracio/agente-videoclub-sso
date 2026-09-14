@@ -34,45 +34,36 @@ All three are gone. `KEYCLOAK_USERNAME` and `KEYCLOAK_PASSWORD` no longer exist 
 
 ## 2. Architecture
 
-```
- ┌─────────────┐                      ┌────────────────────┐
- │  React SPA  │                      │    Keycloak SSO    │
- │ (react-sso) │                      │      (:9091)       │
- └──────┬──────┘                      └─────────┬──────────┘
-        │                                       │
-        │ 1. Auth Code Flow + PKCE              │
-        ├──────────────────────────────────────>│
-        │ 2. User access token (JWT)            │
-        │<──────────────────────────────────────┤
-        │                                       │
-        │ 3. POST /api/agent/chat               │
-        │    Authorization: Bearer <user_jwt>   │
-        ▼                                       │
- ┌──────────────────────┐                       │
- │  Spring Cloud Gateway│  forwards the header  │
- │       (:9500)        │  unchanged            │
- └──────┬───────────────┘                       │
-        │                                       │
-        ▼                                       │
- ┌──────────────────────┐                       │
- │   videoclub-agent    │                       │
- │       (:8085)        │                       │
- ├──────────────────────┤                       │
- │ • Resource Server    │ 4. Validate signature │
- │ • TokenRelayService  ├───────────────────────┤ (JWKS, cached)
- │ • Spring AI ChatClient                       │
- └──────┬───────────────┘                       │
-        │                                       │
-        │ 5. MCP Streamable HTTP                │
-        │    Authorization: Bearer <user_jwt>   │
-        ▼                                       │
- ┌──────────────────────┐                       │
- │    springboot-sso    │                       │
- │       (:8080)        │                       │
- ├──────────────────────┤                       │
- │ • MCP Server         │ 6. @PreAuthorize evaluates
- │ • @PreAuthorize      │    the caller's own roles
- └──────────────────────┘
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Browser
+    participant React as React SPA (:5173)
+    participant Keycloak as Keycloak SSO (:9091)
+    participant Gateway as Spring Cloud Gateway (:9500)
+    participant Agent as videoclub-agent (:8085)
+    participant Backend as springboot-sso (:8080)
+
+    User->>React: Authenticate
+    React->>Keycloak: Auth Code Flow + PKCE
+    Keycloak-->>React: User Access Token (JWT)
+    
+    User->>React: Send prompt to AI Assistant
+    React->>Gateway: POST /api/agent/chat (Bearer <user_jwt>)
+    Note over Gateway: Forwards Authorization header unchanged
+    Gateway->>Agent: Route /api/agent/** to agent:8085
+    
+    Agent->>Keycloak: Validate signature (JWKS cached)
+    Keycloak-->>Agent: Token valid
+    
+    Note over Agent: Supervisor delegates to Sub-Agent<br/>TokenRelayService extracts caller JWT
+    Agent->>Backend: MCP Streamable HTTP (tools/call) (Bearer <user_jwt>)
+    
+    Note over Backend: @PreAuthorize evaluates caller real roles
+    Backend-->>Agent: JSON-RPC CallToolResult (data or error)
+    Agent-->>Gateway: HTTP 200 (Synthesized answer)
+    Gateway-->>React: HTTP 200 (Synthesized answer)
+    React-->>User: Render assistant reply
 ```
 
 The gateway needs no `TokenRelay=` filter. That filter relays the token of an
@@ -156,6 +147,12 @@ the servlet thread would have executed tools as the service account. It was harm
 that account holds no business roles, which is a configuration accident rather than a guarantee.
 Failing closed makes the guarantee structural.
 
+### Multi-agent delegation and token preservation
+
+In the hierarchical multi-agent architecture (Supervisor pattern), `AgentService` does not execute MCP tools directly. Instead, it delegates domain-specific tasks to specialized sub-agents (`CatalogSubAgent` and `MembershipSubAgent`) via Spring AI `@Tool` methods.
+
+Because this delegation occurs synchronously within the same HTTP servlet request thread, the caller's `SecurityContext` (and therefore `JwtAuthenticationToken`) remains fully intact. When a sub-agent invokes its filtered tool callbacks, `TokenRelayService` reads the exact same user JWT from `SecurityContextHolder`, guaranteeing that sub-agents never escalate privileges or execute tools as an anonymous/service identity.
+
 ### Tool discovery is lazy, and that is the recovery path
 
 `SyncMcpToolCallbackProvider` (spring-ai-mcp 2.0.1) caches its callbacks in `cachedToolCallbacks` and
@@ -222,9 +219,9 @@ goes through the gateway on `:9500`, which is what proves the route forwards the
 | `POST /api/agent/chat` without token | 401 | 401 |
 | `GET /api/agent/tools` without token | 401 | 401 |
 | `GET /api/agent/tools` with any valid token | 5 tools | `get_movie`, `list_movies`, `search_movies`, `get_socio`, `list_socios` |
-| Chat as `usuarioadmin`: *"Listá los socios registrados"* | member list returned | full member registry returned |
-| Chat as `usuariocliente`: *"Listá los socios registrados"* | denial explained in prose, HTTP 200 | *"no tengo acceso a la información sobre los socios registrados"* |
-| Chat as `usuariocliente`: *"¿Qué películas hay?"* | catalog returned | catalog returned |
+| Chat as `usuarioadmin`: *"Listá los socios registrados"* | member list returned | full member registry returned (`agentsInvoked: ["membership-agent"]`) |
+| Chat as `usuariocliente`: *"Listá los socios registrados"* | denial explained in prose, HTTP 200 | *"no tengo acceso a la información sobre los socios registrados"* (`agentsInvoked: ["membership-agent"]`) |
+| Chat as `usuariocliente`: *"¿Qué películas hay?"* | catalog returned | catalog returned (`agentsInvoked: ["catalog-agent"]`) |
 
 The last two rows together are the real proof: the same agent, two identities, two outcomes.
 
@@ -248,3 +245,6 @@ user password for a client secret is the acceptable half of that trade; committi
 
 The fix is to drop the default so startup fails without the variable, put a placeholder in
 `.env.example`, and rotate the secret in Keycloak, since it is present from the first commit onward.
+
+> **Update (Clase 6 / Hardening):**
+> Compose files (`docker-compose.yml` and `docker-compose.prod.yml`) have been cleansed of hardcoded secret fallbacks (`:-fallback`), establishing `.env` and `.env.prod` as the single sources of truth. Git tracking strictly ignores `.env.*` (while preserving `.env.template` and `.env.prod.template`). Rotating the secret in Keycloak remains recommended for production readiness.
