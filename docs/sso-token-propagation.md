@@ -153,6 +153,8 @@ In the hierarchical multi-agent architecture (Supervisor pattern), `AgentService
 
 Because this delegation occurs synchronously within the same HTTP servlet request thread, the caller's `SecurityContext` (and therefore `JwtAuthenticationToken`) remains fully intact. When a sub-agent invokes its filtered tool callbacks, `TokenRelayService` reads the exact same user JWT from `SecurityContextHolder`, guaranteeing that sub-agents never escalate privileges or execute tools as an anonymous/service identity.
 
+*Note on concurrency:* `SecurityContextHolder` uses `MODE_THREADLOCAL` by default. Sub-agent calls currently execute synchronously on the servlet thread. If sub-agents were ever executed in parallel via asynchronous thread pools (e.g. `CompletableFuture`), executors would need to be wrapped with `DelegatingSecurityContextExecutorService` to avoid losing the caller's authentication token.
+
 ### Tool discovery is lazy, and that is the recovery path
 
 `SyncMcpToolCallbackProvider` (spring-ai-mcp 2.0.1) caches its callbacks in `cachedToolCallbacks` and

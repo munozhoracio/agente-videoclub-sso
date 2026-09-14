@@ -190,3 +190,12 @@ flowchart TD
    - Conectado exclusivamente a herramientas MCP de socios (`get_socio`, `list_socios`).
 4. **`ExecutionTracker`**:
    - Registra en tiempo de ejecución tanto los sub-agentes convocados (`agentsInvoked`) como las herramientas ejecutadas (`toolsExecuted`).
+5. **`AbstractDomainSubAgent` (Base y Protección Fail-Fast)**:
+   - Clase base abstracta que encapsula el filtrado de herramientas, el registro en el tracker y la ejecución del ChatClient.
+   - **Fail-Fast contra Alucinaciones**: Si un sub-agente especializado detecta 0 herramientas MCP disponibles para su dominio, interrumpe de inmediato con `IllegalStateException` y log `ERROR`. Esto previene la degradación silenciosa donde el LLM respondería inventando datos falsos sin herramientas reales.
+6. **Resolución de Anáforas en la Delegación (Context-Preserving Rewording)**:
+   - Los sub-agentes se mantienen *stateless* y enfocados en su dominio. Para preservar el contexto conversacional sin duplicar la memoria, el orquestador (`AgentService`) reformula la consulta en el parámetro `query` de forma 100% auto-contenida, resolviendo referencias previas y pronombres antes de invocar la tool.
+7. **Resiliencia y Mapeo de Errores (`AgentController`)**:
+   - Excepciones de falta de token o JWT inválido se mapean a `401 Unauthorized`.
+   - Ausencia o fallo de herramientas de dominio se mapea a `503 Service Unavailable`.
+   - Sanitización de errores 500 para evitar fugas de trazas y nombres de clases internas.

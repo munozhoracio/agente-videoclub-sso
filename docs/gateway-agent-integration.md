@@ -124,10 +124,16 @@ Instead of exposing all MCP tools directly to a single generalist model, `videoc
 - **`AgentService` (Supervisor / Router)**: Receives user queries, maintains conversation context,
   handles general greetings without invoking tools, and routes domain-specific requests to
   sub-agents via `@Tool` functions (`consultCatalogAgent`, `consultMembershipAgent`).
-- **`CatalogSubAgent`**: ChatClient specialized with a movie domain system prompt and filtered to
-  catalog tools (`list_movies`, `get_movie`, `search_movies`).
-- **`MembershipSubAgent`**: ChatClient specialized in membership and permissions, filtered to socio
-  tools (`get_socio`, `list_socios`).
+- **`CatalogSubAgent` & `MembershipSubAgent`**: Inherit from `AbstractDomainSubAgent`, specializing
+  their system prompts and tool whitelists (`list_movies`, `get_movie`, `search_movies` for catalog;
+  `get_socio`, `list_socios` for membership).
+- **Fail-Fast against Silent Degradation**: `AbstractDomainSubAgent` verifies that matching domain tools
+  are discovered. If a sub-agent receives 0 tools (e.g. MCP handshake failure or tool renaming), it logs
+  an `ERROR` and immediately throws an `IllegalStateException`. This prevents the model from silently
+  falling back to generative hallucination.
+- **Context-Preserving Delegation (Query Rewording)**: Sub-agents remain stateless. To prevent context
+  loss across conversational turns (anaphora problem), `AgentService` is instructed to reword the query
+  in `@ToolParam` into a fully self-contained question before invoking the sub-agent.
 
 ### Conversational memory & state management
 
