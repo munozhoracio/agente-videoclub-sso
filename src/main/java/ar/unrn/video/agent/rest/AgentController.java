@@ -1,5 +1,6 @@
 package ar.unrn.video.agent.rest;
 
+import ar.unrn.video.agent.generativeui.UiArtifact;
 import ar.unrn.video.agent.service.AgentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,7 +31,8 @@ public class AgentController {
             List<String> toolsExecuted,
             List<String> toolsDenied,
             List<String> toolsAvailable,
-            boolean fromMemory) {}
+            boolean fromMemory,
+            List<UiArtifact> artifacts) {}
 
     @PostMapping(value = "/chat", consumes = "application/json", produces = "application/json")
     public ResponseEntity<?> chat(@RequestBody(required = false) final ChatRequest request) {
@@ -51,7 +53,8 @@ public class AgentController {
                     result.toolsExecuted(),
                     result.toolsDenied(),
                     result.toolsAvailable(),
-                    result.fromMemory()
+                    result.fromMemory(),
+                    result.artifacts()
             ));
         } catch (IllegalStateException e) {
             log.error("Domain tool or authentication state error in chat: {}", e.getMessage());

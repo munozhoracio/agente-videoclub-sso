@@ -1,6 +1,8 @@
 package ar.unrn.video.agent.service;
 
 import ar.unrn.video.agent.auth.UserProfile;
+import ar.unrn.video.agent.generativeui.GenerativeUiExtractor;
+import ar.unrn.video.agent.generativeui.UiArtifact;
 import ar.unrn.video.agent.orchestrator.OrchestratorTools;
 import ar.unrn.video.agent.subagents.CatalogSubAgent;
 import ar.unrn.video.agent.subagents.MembershipSubAgent;
@@ -32,18 +34,21 @@ public class AgentService {
     private final MembershipSubAgent membershipSubAgent;
     private final SyncMcpToolCallbackProvider toolCallbackProvider;
     private final ChatMemory chatMemory;
+    private final GenerativeUiExtractor generativeUiExtractor;
 
     public AgentService(
             final ChatClient.Builder chatClientBuilder,
             final CatalogSubAgent catalogSubAgent,
             final MembershipSubAgent membershipSubAgent,
             final SyncMcpToolCallbackProvider toolCallbackProvider,
-            final ChatMemory chatMemory) {
+            final ChatMemory chatMemory,
+            final GenerativeUiExtractor generativeUiExtractor) {
         this.chatClientBuilder = chatClientBuilder;
         this.catalogSubAgent = catalogSubAgent;
         this.membershipSubAgent = membershipSubAgent;
         this.toolCallbackProvider = toolCallbackProvider;
         this.chatMemory = chatMemory;
+        this.generativeUiExtractor = generativeUiExtractor;
     }
 
     public record ChatResult(
@@ -53,7 +58,8 @@ public class AgentService {
             List<String> toolsExecuted,
             List<String> toolsDenied,
             List<String> toolsAvailable,
-            boolean fromMemory
+            boolean fromMemory,
+            List<UiArtifact> artifacts
     ) {}
 
     /**
@@ -118,7 +124,11 @@ public class AgentService {
         log.info("Turn completed for conversationId: {}. Agents: {}, Tools: {}, Denied: {}, FromMemory: {}",
                 conversationId, agentsInvoked, toolsExecuted, toolsDenied, fromMemory);
 
-        return new ChatResult(response, conversationId, agentsInvoked, toolsExecuted, toolsDenied, toolsAvailable, fromMemory);
+        // The structured blocks leave the text here, so no client ever has to parse prose.
+        final GenerativeUiExtractor.ExtractionResult extraction = generativeUiExtractor.extract(response);
+
+        return new ChatResult(extraction.text(), conversationId, agentsInvoked, toolsExecuted, toolsDenied,
+                toolsAvailable, fromMemory, extraction.artifacts());
     }
 
     /**
