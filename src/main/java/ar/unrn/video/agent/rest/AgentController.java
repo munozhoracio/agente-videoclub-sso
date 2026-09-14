@@ -21,9 +21,10 @@ public class AgentController {
         this.agentService = agentService;
     }
 
-    public record ChatRequest(String prompt) {}
+    public record ChatRequest(String prompt, String conversationId) {}
     public record ChatResponse(
             String prompt,
+            String conversationId,
             String response,
             List<String> agentsInvoked,
             List<String> toolsExecuted,
@@ -39,9 +40,10 @@ public class AgentController {
         }
 
         try {
-            final AgentService.ChatResult result = agentService.chat(request.prompt());
+            final AgentService.ChatResult result = agentService.chat(request.prompt(), request.conversationId());
             return ResponseEntity.ok(new ChatResponse(
                     request.prompt(),
+                    result.conversationId(),
                     result.response(),
                     result.agentsInvoked(),
                     result.toolsExecuted(),
@@ -55,6 +57,16 @@ public class AgentController {
                     "type", e.getClass().getSimpleName()
             ));
         }
+    }
+
+    @DeleteMapping("/chat/memory")
+    public ResponseEntity<Map<String, String>> clearMemory(
+            @RequestParam(required = false) final String conversationId) {
+        agentService.clearMemory(conversationId);
+        return ResponseEntity.ok(Map.of(
+                "status", "OK",
+                "message", "Memoria de conversación reiniciada correctamente."
+        ));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
