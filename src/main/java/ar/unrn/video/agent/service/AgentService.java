@@ -1,13 +1,13 @@
 package ar.unrn.video.agent.service;
 
+import ar.unrn.video.agent.orchestrator.OrchestratorTools;
+import ar.unrn.video.agent.subagents.CatalogSubAgent;
+import ar.unrn.video.agent.subagents.MembershipSubAgent;
+import ar.unrn.video.agent.tracker.ExecutionTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -15,79 +15,87 @@ import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
+/**
+ * Orchestrator / Supervisor Agent Service for VideoClub UNRN.
+ * Coordinates conversation and delegates specialized tasks to sub-agents.
+ */
 @Service
 public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
     private final ChatClient.Builder chatClientBuilder;
+    private final CatalogSubAgent catalogSubAgent;
+    private final MembershipSubAgent membershipSubAgent;
     private final SyncMcpToolCallbackProvider toolCallbackProvider;
 
     public AgentService(
             final ChatClient.Builder chatClientBuilder,
+            final CatalogSubAgent catalogSubAgent,
+            final MembershipSubAgent membershipSubAgent,
             final SyncMcpToolCallbackProvider toolCallbackProvider) {
         this.chatClientBuilder = chatClientBuilder;
+        this.catalogSubAgent = catalogSubAgent;
+        this.membershipSubAgent = membershipSubAgent;
         this.toolCallbackProvider = toolCallbackProvider;
     }
 
-    public record ChatResult(String response, List<String> toolsExecuted, List<String> toolsAvailable) {}
+    public record ChatResult(
+            String response,
+            List<String> agentsInvoked,
+            List<String> toolsExecuted,
+            List<String> toolsAvailable
+    ) {}
 
     /**
-     * Executes conversational agent with user prompt, injecting tools dynamically
-     * and tracking which tools were executed during this turn.
+     * Orchestrates user chat by dispatching to specialized sub-agents via tool-calling.
      */
     public ChatResult chat(final String userPrompt) {
-        log.info("Agent received prompt: {}", userPrompt);
+        log.info("Orchestrator received prompt: {}", userPrompt);
 
-        final List<String> toolsExecuted = new CopyOnWriteArrayList<>();
-        final ToolCallback[] availableCallbacks = toolCallbackProvider.getToolCallbacks();
-        final List<String> availableToolNames = Arrays.stream(availableCallbacks)
-                .map(t -> t.getToolDefinition().name())
-                .toList();
+        final ExecutionTracker tracker = new ExecutionTracker();
+        final String callerName = extractCallerName();
 
-        final ToolCallback[] trackingCallbacks = Arrays.stream(availableCallbacks)
-                .map(cb -> new TrackingToolCallback(cb, toolsExecuted))
-                .toArray(ToolCallback[]::new);
-
-        String callerName = "Usuario";
-        final Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth instanceof JwtAuthenticationToken jwtAuth) {
-            final String name = jwtAuth.getToken().getClaimAsString("name");
-            if (name != null && !name.isBlank()) {
-                callerName = name;
-            } else {
-                final String pref = jwtAuth.getToken().getClaimAsString("preferred_username");
-                if (pref != null && !pref.isBlank()) {
-                    callerName = pref;
-                }
-            }
-        }
+        final OrchestratorTools orchestratorTools = new OrchestratorTools(
+                catalogSubAgent,
+                membershipSubAgent,
+                tracker,
+                callerName
+        );
 
         final String systemPrompt = String.format(
-                "Sos el asistente de inteligencia artificial oficial de VideoClub UNRN. "
+                "Sos el Agente Orquestador y Supervisor oficial de VideoClub UNRN. "
                 + "Estás atendiendo a %s. "
-                + "Tenés acceso a herramientas MCP para consultar el catálogo de películas y el padrón de socios. "
-                + "Utilizá siempre las herramientas disponibles cuando se pregunte por películas, socios o datos del sistema. "
-                + "Si una herramienta devuelve un error de permisos o acceso denegado, explicáselo amablemente al usuario. "
-                + "Respondé siempre en español de forma clara, precisa y concisa.",
+                + "Tu función principal es coordinar la atención al usuario delegando en tus sub-agentes especializados: "
+                + "1. Especialista en Catálogo (consultCatalogAgent): Para consultas sobre películas, géneros, estrenos, stock o disponibilidad en el catálogo. "
+                + "2. Especialista en Membresías y Socios (consultMembershipAgent): Para consultas sobre datos de socios, estado de clientes o padrón de membresías. "
+                + "Reglas de comportamiento: "
+                + "- Para saludos de cortesía, presentaciones o preguntas generales sobre qué podés hacer, respondé directamente con amabilidad sin invocar a ningún sub-agente. "
+                + "- Si la consulta involucra películas o catálogo, delegá inmediatamente en consultCatalogAgent. "
+                + "- Si la consulta involucra socios o membresías, delegá inmediatamente en consultMembershipAgent. "
+                + "- Si una consulta requiere ambos dominios, podés invocar a ambos sub-agentes y consolidar una respuesta integrada. "
+                + "- Respondé siempre en español de forma clara, natural, profesional y precisa.",
                 callerName
         );
 
         final String response = chatClientBuilder.build().prompt()
                 .system(systemPrompt)
-                .tools((Object[]) trackingCallbacks)
+                .tools(orchestratorTools)
                 .user(userPrompt)
                 .call()
                 .content();
 
-        log.info("Agent response generated. Tools executed: {}", toolsExecuted);
-        return new ChatResult(response, toolsExecuted, availableToolNames);
+        final List<String> agentsInvoked = tracker.getAgentsInvoked();
+        final List<String> toolsExecuted = tracker.getToolsExecuted();
+        final List<String> toolsAvailable = getAvailableToolNames();
+
+        log.info("Orchestration completed. Agents invoked: {}, Tools executed: {}", agentsInvoked, toolsExecuted);
+        return new ChatResult(response, agentsInvoked, toolsExecuted, toolsAvailable);
     }
 
     /**
-     * Returns the names of all currently discovered MCP tools.
+     * Returns the names of all currently discovered MCP tools in the system.
      */
     public List<String> getAvailableToolNames() {
         return Arrays.stream(toolCallbackProvider.getToolCallbacks())
@@ -95,44 +103,18 @@ public class AgentService {
                 .toList();
     }
 
-    /**
-     * Decorator that intercepts tool invocations to track executed tool names.
-     */
-    private static class TrackingToolCallback implements ToolCallback {
-        private final ToolCallback delegate;
-        private final List<String> executedTools;
-
-        TrackingToolCallback(final ToolCallback delegate, final List<String> executedTools) {
-            this.delegate = delegate;
-            this.executedTools = executedTools;
-        }
-
-        @Override
-        public ToolDefinition getToolDefinition() {
-            return delegate.getToolDefinition();
-        }
-
-        @Override
-        public ToolMetadata getToolMetadata() {
-            return delegate.getToolMetadata();
-        }
-
-        @Override
-        public String call(final String toolInput) {
-            final String toolName = delegate.getToolDefinition().name();
-            if (!executedTools.contains(toolName)) {
-                executedTools.add(toolName);
+    private String extractCallerName() {
+        final Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwtAuth) {
+            final String name = jwtAuth.getToken().getClaimAsString("name");
+            if (name != null && !name.isBlank()) {
+                return name;
             }
-            return delegate.call(toolInput);
-        }
-
-        @Override
-        public String call(final String toolInput, final ToolContext toolContext) {
-            final String toolName = delegate.getToolDefinition().name();
-            if (!executedTools.contains(toolName)) {
-                executedTools.add(toolName);
+            final String pref = jwtAuth.getToken().getClaimAsString("preferred_username");
+            if (pref != null && !pref.isBlank()) {
+                return pref;
             }
-            return delegate.call(toolInput, toolContext);
         }
+        return "Usuario";
     }
 }

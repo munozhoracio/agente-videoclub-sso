@@ -153,3 +153,42 @@ curl -s -X POST "http://localhost:9500/api/agent/chat" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "¿Qué películas hay en el catálogo?"}' | jq .
 ```
+
+---
+
+## Arquitectura Multi-Agente Jerárquica (Spring AI)
+
+El servicio implementa el patrón **Supervisor / Hierarchical Multi-Agent System**:
+
+```text
+               ┌───────────────────────────────┐
+               │    Agente Orquestador         │
+               │    (Supervisor / Router)      │
+               └───────────────┬───────────────┘
+                               │
+            ┌──────────────────┴──────────────────┐
+            │ Invoca sub-agentes como @Tool       │
+            ▼                                     ▼
+┌───────────────────────────────┐   ┌───────────────────────────────┐
+│   CatalogSubAgent             │   │   MembershipSubAgent          │
+│   (ChatClient con prompt de   │   │   (ChatClient con prompt de   │
+│    experto en catálogo)       │   │    experto en membresías)     │
+└───────────────┬───────────────┘   └───────────────┬───────────────┘
+                │ Solo MCP de Catálogo              │ Solo MCP de Socios
+                ▼                                   ▼
+   [ list_movies, get_movie, ... ]      [ get_socio, list_socios ]
+```
+
+### Componentes:
+1. **`AgentService` (Orquestador / Supervisor)**:
+   - Atiende al usuario, clasifica intenciones y sintetiza respuestas integradas.
+   - Responde saludos y preguntas generales directamente sin invocar herramientas ni gastar tokens innecesarios.
+   - Cuenta con herramientas de delegación `@Tool` (`consultCatalogAgent`, `consultMembershipAgent`).
+2. **`CatalogSubAgent` (Especialista en Catálogo)**:
+   - ChatClient aislado con system prompt experto en películas.
+   - Conectado exclusivamente a herramientas MCP de películas (`list_movies`, `get_movie`, `search_movies`).
+3. **`MembershipSubAgent` (Especialista en Membresías y Socios)**:
+   - ChatClient aislado con system prompt experto en socios y permisos.
+   - Conectado exclusivamente a herramientas MCP de socios (`get_socio`, `list_socios`).
+4. **`ExecutionTracker`**:
+   - Registra en tiempo de ejecución tanto los sub-agentes convocados (`agentsInvoked`) como las herramientas ejecutadas (`toolsExecuted`).

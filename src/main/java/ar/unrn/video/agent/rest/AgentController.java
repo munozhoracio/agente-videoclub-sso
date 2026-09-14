@@ -25,6 +25,7 @@ public class AgentController {
     public record ChatResponse(
             String prompt,
             String response,
+            List<String> agentsInvoked,
             List<String> toolsExecuted,
             List<String> toolsAvailable) {}
 
@@ -42,14 +43,15 @@ public class AgentController {
             return ResponseEntity.ok(new ChatResponse(
                     request.prompt(),
                     result.response(),
+                    result.agentsInvoked(),
                     result.toolsExecuted(),
                     result.toolsAvailable()
             ));
         } catch (Exception e) {
-            log.error("Error executing agent chat: {}", e.getMessage(), e);
+            log.error("Error executing multi-agent chat: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
                     "error", "Agent Execution Error",
-                    "message", e.getMessage() != null ? e.getMessage() : "Error invocando el LLM o las herramientas MCP",
+                    "message", e.getMessage() != null ? e.getMessage() : "Error invocando el orquestador o los sub-agentes",
                     "type", e.getClass().getSimpleName()
             ));
         }
