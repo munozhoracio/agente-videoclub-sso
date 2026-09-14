@@ -182,6 +182,26 @@ and paraphrase. A real 403 would abort the call before the model ever saw it.
 
 **Do not write client code that switches on a 403 here — there is none.**
 
+### 4.1. Visual transparency in the frontend (`toolsDenied`)
+
+When an MCP tool invocation produces an `AccessDeniedException`, `TrackingToolCallback` intercepts the exception,
+records the tool into `ExecutionTracker.toolsDenied`, and allows the exception to propagate to Spring AI's
+tool execution manager so the LLM can generate its explanatory prose.
+
+The `/api/agent/chat` response carries `toolsDenied: List<String>` alongside `toolsExecuted`:
+
+```json
+{
+  "agentsInvoked": ["MembershipSubAgent"],
+  "toolsExecuted": ["list_socios"],
+  "toolsDenied": ["list_socios"]
+}
+```
+
+The frontend UI (`AgentChatView.tsx`) leverages this contract to distinguish tools that executed successfully
+from those blocked by Keycloak `@PreAuthorize`, rendering a distinct alert badge (`🚫 list_socios (sin permiso)`)
+with descriptive tooltips, preventing the false perception that the action succeeded.
+
 ---
 
 ## 5. Configuration reference

@@ -11,6 +11,7 @@ public class ExecutionTracker {
 
     private final List<String> agentsInvoked = new CopyOnWriteArrayList<>();
     private final List<String> toolsExecuted = new CopyOnWriteArrayList<>();
+    private final List<String> toolsDenied = new CopyOnWriteArrayList<>();
 
     public void recordAgent(final String agentName) {
         if (agentName != null && !agentsInvoked.contains(agentName)) {
@@ -24,11 +25,21 @@ public class ExecutionTracker {
         }
     }
 
+    public void recordToolDenied(final String toolName) {
+        if (toolName != null && !toolsDenied.contains(toolName)) {
+            toolsDenied.add(toolName);
+        }
+    }
+
     public List<String> getAgentsInvoked() {
         return List.copyOf(agentsInvoked);
     }
 
     public List<String> getToolsExecuted() {
         return List.copyOf(toolsExecuted);
+    }
+
+    public List<String> getToolsDenied() {
+        return List.copyOf(toolsDenied);
     }
 }

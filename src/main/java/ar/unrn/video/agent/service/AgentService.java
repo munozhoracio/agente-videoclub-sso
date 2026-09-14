@@ -51,6 +51,7 @@ public class AgentService {
             String conversationId,
             List<String> agentsInvoked,
             List<String> toolsExecuted,
+            List<String> toolsDenied,
             List<String> toolsAvailable,
             boolean fromMemory
     ) {}
@@ -110,13 +111,14 @@ public class AgentService {
 
         final List<String> agentsInvoked = tracker.getAgentsInvoked();
         final List<String> toolsExecuted = tracker.getToolsExecuted();
+        final List<String> toolsDenied = tracker.getToolsDenied();
         final List<String> toolsAvailable = getAvailableToolNames();
         final boolean fromMemory = historySizeBeforeTurn > 2 && toolsExecuted.isEmpty() && agentsInvoked.isEmpty();
 
-        log.info("Turn completed for conversationId: {}. Agents: {}, Tools: {}, FromMemory: {}",
-                conversationId, agentsInvoked, toolsExecuted, fromMemory);
+        log.info("Turn completed for conversationId: {}. Agents: {}, Tools: {}, Denied: {}, FromMemory: {}",
+                conversationId, agentsInvoked, toolsExecuted, toolsDenied, fromMemory);
 
-        return new ChatResult(response, conversationId, agentsInvoked, toolsExecuted, toolsAvailable, fromMemory);
+        return new ChatResult(response, conversationId, agentsInvoked, toolsExecuted, toolsDenied, toolsAvailable, fromMemory);
     }
 
     /**

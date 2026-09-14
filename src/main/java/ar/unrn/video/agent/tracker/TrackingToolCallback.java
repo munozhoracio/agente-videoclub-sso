@@ -32,13 +32,42 @@ public class TrackingToolCallback implements ToolCallback {
     public String call(final String toolInput) {
         final String toolName = delegate.getToolDefinition().name();
         tracker.recordTool(toolName);
-        return delegate.call(toolInput);
+        try {
+            return delegate.call(toolInput);
+        } catch (Exception e) {
+            checkAndRecordDenial(toolName, e);
+            throw e;
+        }
     }
 
     @Override
     public String call(final String toolInput, final ToolContext toolContext) {
         final String toolName = delegate.getToolDefinition().name();
         tracker.recordTool(toolName);
-        return delegate.call(toolInput, toolContext);
+        try {
+            return delegate.call(toolInput, toolContext);
+        } catch (Exception e) {
+            checkAndRecordDenial(toolName, e);
+            throw e;
+        }
+    }
+
+    private void checkAndRecordDenial(final String toolName, final Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            final String msg = current.getMessage();
+            if (msg != null && (
+                    msg.contains("Access Denied")
+                    || msg.contains("AccessDeniedException")
+                    || msg.contains("403")
+                    || msg.contains("Forbidden")
+                    || msg.toLowerCase().contains("denied")
+                    || msg.toLowerCase().contains("permis")
+            )) {
+                tracker.recordToolDenied(toolName);
+                return;
+            }
+            current = current.getCause();
+        }
     }
 }

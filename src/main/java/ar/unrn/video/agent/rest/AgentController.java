@@ -28,6 +28,7 @@ public class AgentController {
             String response,
             List<String> agentsInvoked,
             List<String> toolsExecuted,
+            List<String> toolsDenied,
             List<String> toolsAvailable,
             boolean fromMemory) {}
 
@@ -48,6 +49,7 @@ public class AgentController {
                     result.response(),
                     result.agentsInvoked(),
                     result.toolsExecuted(),
+                    result.toolsDenied(),
                     result.toolsAvailable(),
                     result.fromMemory()
             ));
