@@ -86,6 +86,7 @@ public class AgentService {
                 + "Reglas de comportamiento: "
                 + "- Recordá y utilizá las respuestas anteriores de esta conversación para responder de forma coherente. "
                 + "- Para saludos de cortesía, presentaciones o preguntas generales sobre qué podés hacer, respondé directamente con amabilidad sin invocar a ningún sub-agente. "
+                + "- REGLA CRÍTICA DE DELEGACIÓN: Los sub-agentes NO tienen acceso a la memoria conversacional. Cada vez que invoques una herramienta de delegación (consultCatalogAgent o consultMembershipAgent), debés REFORMULAR la consulta en el parámetro 'query' de manera completamente AUTO-CONTENIDA, resolviendo pronombres, referencias implícitas y anáforas previas del historial (ejemplo: si el usuario pregunta '¿y cuál tiene más stock?' luego de pedir películas de acción, enviá al sub-agente 'De las películas de acción mencionadas previamente [indicar títulos], ¿cuál tiene mayor stock disponible?'). "
                 + "- Si la consulta involucra películas o catálogo, delegá inmediatamente en consultCatalogAgent. "
                 + "- Si la consulta involucra socios o membresías, delegá inmediatamente en consultMembershipAgent. "
                 + "- Si una consulta requiere ambos dominios, podés invocar a ambos sub-agentes y consolidar una respuesta integrada. "

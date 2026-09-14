@@ -49,12 +49,19 @@ public class AgentController {
                     result.toolsExecuted(),
                     result.toolsAvailable()
             ));
+        } catch (IllegalStateException e) {
+            log.error("Domain tool or authentication state error in chat: {}", e.getMessage());
+            final boolean isAuthError = e.getMessage() != null && e.getMessage().toLowerCase().contains("jwt");
+            final int status = isAuthError ? 401 : 503;
+            return ResponseEntity.status(status).body(Map.of(
+                    "error", isAuthError ? "Unauthorized" : "Service Unavailable",
+                    "message", e.getMessage() != null ? e.getMessage() : "Error en el estado del agente"
+            ));
         } catch (Exception e) {
             log.error("Error executing multi-agent chat: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of(
                     "error", "Agent Execution Error",
-                    "message", e.getMessage() != null ? e.getMessage() : "Error invocando el orquestador o los sub-agentes",
-                    "type", e.getClass().getSimpleName()
+                    "message", "Error procesando la consulta con el asistente inteligente."
             ));
         }
     }

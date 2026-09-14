@@ -32,16 +32,16 @@ public class OrchestratorTools {
         this.callerName = callerName;
     }
 
-    @Tool(description = "Delegates inquiries about the movie catalog, film genres, movie search, availability, or titles to the specialized Catalog Agent.")
+    @Tool(description = "Delegates inquiries about the movie catalog, film genres, movie search, availability, stock or titles to the specialized Catalog Agent.")
     public String consultCatalogAgent(
-            @ToolParam(description = "Detailed user question or query about movies or the catalog") final String query) {
+            @ToolParam(description = "Self-contained query about movies or catalog, explicitly resolving any pronouns, anaphora or prior conversational references") final String query) {
         log.info("Orchestrator delegating to CatalogSubAgent with query: {}", query);
         return catalogSubAgent.execute(query, tracker, callerName);
     }
 
     @Tool(description = "Delegates inquiries about club members, socios, partners, membership status, or member listings to the specialized Membership Agent.")
     public String consultMembershipAgent(
-            @ToolParam(description = "Detailed user question or query about members or socios") final String query) {
+            @ToolParam(description = "Self-contained query about members or socios, explicitly resolving any pronouns, anaphora or prior conversational references") final String query) {
         log.info("Orchestrator delegating to MembershipSubAgent with query: {}", query);
         return membershipSubAgent.execute(query, tracker, callerName);
     }
