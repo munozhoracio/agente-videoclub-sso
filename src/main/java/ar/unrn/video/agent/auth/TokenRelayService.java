@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -85,15 +86,43 @@ public class TokenRelayService {
      *                               someone else's tool call under a different identity.
      */
     public String getUserBearerToken() {
-        final Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth instanceof JwtAuthenticationToken jwtAuth) {
-            log.debug("Relaying bearer token of authenticated caller: {}", jwtAuth.getName());
-            return jwtAuth.getToken().getTokenValue();
-        }
+        return currentJwtAuthentication()
+                .map(jwtAuth -> {
+                    log.debug("Relaying bearer token of authenticated caller: {}", jwtAuth.getName());
+                    return jwtAuth.getToken().getTokenValue();
+                })
+                .orElseThrow(() -> new IllegalStateException(
+                        "No authenticated JWT in the SecurityContext; refusing to call MCP tools "
+                        + "without a caller identity. MCP tool calls must run under the user's own "
+                        + "token."));
+    }
 
-        throw new IllegalStateException(
-                "No authenticated JWT in the SecurityContext; refusing to call MCP tools without a "
-                + "caller identity. MCP tool calls must run under the user's own token.");
+    /**
+     * Returns the caller's JWT if this thread has one, without failing when it does not.
+     *
+     * <p>This is the capture half of {@link #getUserBearerToken()}. {@code SecurityContextHolder}
+     * is a {@code ThreadLocal}, and the MCP client writes its HTTP requests on its own worker
+     * threads, so looking the identity up at the moment the request is built finds nothing. This
+     * method is called instead on the thread that <em>starts</em> the operation — the servlet
+     * thread, where the context is still visible — so the token can be carried into the reactive
+     * pipeline rather than searched for at the far end of it.
+     *
+     * <p>An empty result is a normal outcome, not an error: it is how the startup handshake, which
+     * runs before any HTTP request exists, is told apart from a user-initiated call.
+     *
+     * @return the caller's raw token value, or empty when this thread carries no authenticated JWT
+     */
+    public Optional<String> currentUserToken() {
+        return currentJwtAuthentication().map(jwtAuth -> {
+            log.debug("Capturing bearer token of caller {} for the MCP transport context",
+                    jwtAuth.getName());
+            return jwtAuth.getToken().getTokenValue();
+        });
+    }
+
+    private static Optional<JwtAuthenticationToken> currentJwtAuthentication() {
+        final Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth instanceof JwtAuthenticationToken jwtAuth ? Optional.of(jwtAuth) : Optional.empty();
     }
 
     /**
