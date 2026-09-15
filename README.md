@@ -15,9 +15,13 @@ Spring Boot 4 + Spring AI microservice that acts as an intelligent assistant for
 
 ## Documentation
 
+> 🧭 **Plataforma VideoClub:** Para la visión integral de la arquitectura, seguridad SSO transversal, topología de red y catálogo central de ADRs, consultá la [Documentación de Arquitectura de la Plataforma](https://github.com/hmunoz/springboot-sso/tree/2026/docs).
+
+* [ADR Index — Decisiones de Diseño del Agente](./docs/adr.md)
 * [SSO Token Propagation (Token Relay) — implemented architecture](./docs/sso-token-propagation.md)
 * [Gateway Integration, Token Relay & React Chat Tab (as built)](./docs/gateway-agent-integration.md)
-* [HTTP Client Testing Skill](../springboot-sso/.agents/skills/http-client/SKILL.md)
+* [Generative UI Pattern (SSE Streaming)](./docs/generative-ui-pattern.md)
+* [Plan de Arquitectura de Streaming AG-UI](./docs/agui-streaming-plan.md)
 
 ---
 
