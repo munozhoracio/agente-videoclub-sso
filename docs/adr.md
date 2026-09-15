@@ -256,6 +256,18 @@ Se evaluaron tres caminos, con verificación empírica:
 2. **Fork de `Work-m8/ag-ui-4j`** — **viable, medido**: tres ediciones (bump de `spring-ai` a 2.0.1, swap de `PromptChatMemoryAdvisor` por `MessageChatMemoryAdvisor`, bump de Spring 6.2.9→7.0.9 y Boot 3.4.3→4.1.1) producen `BUILD SUCCESS` y 175 tests verdes sobre JDK 25.
 3. **Adaptador propio** sobre `com.ag-ui.community:java-core:0.1.1` + `java-server:0.1.1` — librería oficial del protocolo, cero dependencias de Spring.
 
+#### Revisión del 15 de septiembre de 2026 — la decisión no cambia, la evidencia se refuerza
+
+Se reevaluó el ecosistema a pedido, resolviendo `repo1.maven.org` y leyendo los jars publicados. **Ningún hallazgo modifica la decisión; tres la sostienen mejor.**
+
+* **La doc oficial del SDK Java prescribe un tercer juego de coordenadas que tampoco existe.** [`docs/sdk/java/overview.mdx`](https://github.com/ag-ui-protocol/ag-ui/blob/main/docs/sdk/java/overview.mdx) indica `com.ag-ui:core|client|http:0.0.1`; esas rutas dan **404**. El namespace real sigue siendo `com.ag-ui.community`. Además esa página documenta sólo la superficie **cliente**: el lado servidor que necesitaríamos ni figura.
+* **Apareció una integración de terceros que parece resolverlo y no lo hace.** [`JavaAIDev/spring-ai-ag-ui`](https://github.com/JavaAIDev/spring-ai-ag-ui) anuncia Spring AI 2.0.0 + AG-UI, pero es un proyecto de ejemplo (6 commits, sin releases) y su `pom.xml` combina el BOM 2.0.0 con `io.github.pascalwilbrink.ag-ui.community:spring-ai:1.0.1` — exactamente la mezcla que la opción 1 descarta. Verificado en su bytecode: **4 referencias a `PromptChatMemoryAdvisor`, alojadas en `SpringAIAgent`**, la clase de entrada de la integración. Y esa clase está **ausente tanto en `spring-ai-client-chat:2.0.0` como en `2.0.1`**. Compila —`javac` no resuelve referencias internas de una dependencia binaria— y falla al cargar la clase. *Un README que dice «usa Spring AI 2.0.0» describe el BOM declarado, no una integración funcionando.*
+* **La opción 3 se midió y es más sólida de lo que se creía.** `com.ag-ui.community:java-core:0.1.1` pesa 69 KB con 63 clases y **ninguna dependencia de runtime**; `java-server:0.1.1` pesa 12,7 KB con 11 clases y depende sólo de `java-core`. Target `release=17`. Cero Spring, cero Reactor, cero Jackson: **por construcción no puede chocar con Spring AI 2.x**, que es precisamente cómo falla el wrapper. A cambio, entrega poco: formato de cable y tipos de evento; todo el mapeo del agente sigue siendo nuestro.
+* **Madurez, sin maquillaje:** el proyecto lleva **dos releases en toda su historia** (`0.1.0` y `0.1.1`, ambos del 9 de septiembre de 2026).
+* **Lo que sí mejoró de nuestro lado:** [ADR-024](#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador) movió la captura del artefacto a `OrchestratorTools.captureArtifacts`, que corre apenas retorna un sub-agente. Ese es exactamente el punto del flujo donde se emitiría un `STATE_SNAPSHOT` incremental: el gancho que necesita el streaming ya existe, y llegó por otro motivo.
+
+El detalle completo, con tablas y rutas verificadas, queda en el apéndice de [`agui-streaming-plan.md`](./agui-streaming-plan.md).
+
 #### Decisión
 **Mantener la respuesta bloqueante por ahora.** El plan completo, con las dos rutas y su secuenciación, queda registrado en [`agui-streaming-plan.md`](./agui-streaming-plan.md) en estado *proposed*.
 

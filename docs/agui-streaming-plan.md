@@ -73,6 +73,72 @@ downgrade you would have to change the BOM, and that drops the MCP server, since
 **Conclusion: the published artifact is unusable as-is.** That is a statement about the jar, not
 about the project — see the next section, which changes the recommendation.
 
+### 0.3 The official Java SDK page prescribes coordinates that do not resolve either
+
+Re-checked on 2026-09-15, this time against the SDK documentation itself
+([`docs/sdk/java/overview.mdx`](https://github.com/ag-ui-protocol/ag-ui/blob/main/docs/sdk/java/overview.mdx)),
+which prescribes a *third* set of coordinates — neither the brief's nor the ones in §0.1:
+
+```xml
+<groupId>com.ag-ui</groupId>
+<artifactId>core</artifactId>   <!-- also: client, http -->
+<version>0.0.1</version>
+```
+
+| Path on `repo1.maven.org/maven2` | Result |
+|---|---|
+| `com/ag-ui/` | `200` |
+| `com/ag-ui/core/`, `com/ag-ui/client/`, `com/ag-ui/http/` | **`404`** |
+| `com/ag-ui/community/` | `200` — the real namespace |
+
+So the official documentation is ahead of what is published. It also documents only a **client**
+surface (`core`, `client`, `http`); the **server** side we need is not covered by that page at all,
+even though `com.ag-ui.community:java-server` does exist. Treat the docs as intent, the repository
+as fact.
+
+> **Method note — do not trust the Maven Central search index for this.**
+> `search.maven.org/solrsearch` returns `numFound: 0` for hyphenated group ids such as `com.ag-ui`
+> **even when the artifacts exist**, and its `spellcheck` block contains its own `numFound` that is
+> easy to misread as a result count. Always resolve
+> `https://repo1.maven.org/maven2/<group path>/<artifact>/maven-metadata.xml` instead.
+
+### 0.4 A third-party integration exists — and it reproduces the broken combination
+
+[`JavaAIDev/spring-ai-ag-ui`](https://github.com/JavaAIDev/spring-ai-ag-ui) advertises Spring AI
+`2.0.0` + AG-UI + CopilotKit. It is an **example project, not a published library** (6 commits, no
+releases, no Maven coordinates of its own). Its `pom.xml` declares:
+
+```xml
+<spring-ai.version>2.0.0</spring-ai.version>
+...
+<dependency>
+  <groupId>io.github.pascalwilbrink.ag-ui.community</groupId>
+  <artifactId>spring-ai</artifactId>
+  <version>1.0.1</version>
+</dependency>
+```
+
+That is exactly the combination §0.2 rules out. Verified in the jar on 2026-09-15:
+
+| Check | Result |
+|---|---|
+| `spring-ai-1.0.1.jar` | 16 086 bytes, 5 classes |
+| References to `PromptChatMemoryAdvisor` in its bytecode | **4** |
+| Class holding them | `com/agui/spring/ai/SpringAIAgent.class` — the integration's entry point, not an avoidable corner |
+| Spring AI declared in its POM | `spring-ai-model` / `spring-ai-client-chat` **1.0.1**, scope `compile` |
+| `PromptChatMemoryAdvisor` in `spring-ai-client-chat` **2.0.0** | **absent** |
+| `PromptChatMemoryAdvisor` in `spring-ai-client-chat` **2.0.1** | **absent** |
+
+It compiles, because `javac` does not resolve a binary dependency's internal references; it fails
+when the JVM loads `SpringAIAgent`. **A README stating "uses Spring AI 2.0.0" describes the declared
+BOM, not a working integration.** The repository is a useful data point precisely because it
+confirms §0.2 from the outside rather than contradicting it.
+
+Note also that `io.github.pascalwilbrink.ag-ui.community` publishes a *wider* set than the
+`com.ag-ui.community` namespace — `java-http`, `java-json`, `java-ok-http`, `java-spring-client`,
+`spring`, `spring-ai` alongside the core modules. Two families, near-identical names, different
+publishers and different quality. Route A deliberately uses the `com.ag-ui.community` one.
+
 ---
 
 ## 1. Two viable routes — one of them is measured, not estimated
@@ -503,3 +569,85 @@ sd '<version>3\.4\.3</version>' '<version>4.1.1</version>' servers/spring/pom.xm
 mvn -B -pl integrations/spring-ai,servers/spring -am test
 # → BUILD SUCCESS, Tests run: 175, Failures: 0, Errors: 0, Skipped: 0
 ```
+
+---
+
+## Appendix — Verified evidence for Route A (2026-09-15)
+
+Collected so a future implementation does not have to re-derive any of it. Every figure below comes
+from resolving `repo1.maven.org` and reading the published jars, not from documentation.
+
+### Coordinates and release history
+
+| Artifact | Versions published | Last publish |
+|---|---|---|
+| `com.ag-ui.community:java-core` | `0.1.0`, `0.1.1` | 2026-09-09 |
+| `com.ag-ui.community:java-server` | `0.1.0`, `0.1.1` | 2026-09-09 |
+| `com.ag-ui.community:java-client` | `0.1.0`, `0.1.1` | 2026-09-09 |
+| `com.ag-ui.community:java-ag-ui` (parent) | `0.1.0`, `0.1.1` | 2026-09-09 |
+
+Two releases in the project's entire history. Kotlin/multiplatform variants (`kotlin-core`,
+`kotlin-client`, `kotlin-tools`, plus iOS/Android targets) live in the same namespace and are not
+relevant here.
+
+### Why these cannot conflict with our stack
+
+| Artifact | Size | Classes | Runtime dependencies |
+|---|---|---|---|
+| `java-core:0.1.1` | 69 141 B | 63 | **none** (JUnit only, test scope) |
+| `java-server:0.1.1` | 12 719 B | 11 | `java-core` only |
+
+Parent declares `<maven.compiler.release>17</maven.compiler.release>` — compatible with our Java 25
+runtime. No Spring, no Reactor, no Jackson anywhere in the tree. **This is the whole argument for
+Route A:** a library that does not know Spring exists cannot collide with Spring AI 2.x, which is
+precisely how the §0.2 wrapper fails.
+
+### What `java-server:0.1.1` actually contains
+
+```
+com/agui/community/server/AgentRegistry
+com/agui/community/server/AgentRunHandler
+com/agui/community/server/EventEncoder
+com/agui/community/server/SseEventEncoder
+com/agui/community/server/EventSink
+com/agui/community/server/OutputStreamEventSink
+com/agui/community/server/EventRelaySubscriber
+com/agui/community/server/jdk/JdkAgentHttpHandler
+```
+
+Twelve kilobytes of event encoding plus a thin handler — an encoder, not a framework. `EventSink` /
+`OutputStreamEventSink` are the seam to wire against Spring MVC's `SseEmitter`;
+`JdkAgentHttpHandler` targets the JDK `HttpServer` and is not what we would use. Read honestly: this
+buys us the wire format and the event types, and nothing else. All the agent-side mapping is still
+ours to write, which §1 already accounts for.
+
+### Event catalog available in `java-core:0.1.1`
+
+Packages: `core/{agent,event,interrupt,message,serialization,tool}`.
+
+```
+RunStartedEvent      RunFinishedEvent      RunErrorEvent
+StepStartedEvent     StepFinishedEvent
+StateSnapshotEvent   StateDeltaEvent       MessagesSnapshotEvent
+CustomEvent          RawEvent              MetaEvent
+ActivitySnapshotEvent  ActivityDeltaEvent
+Reasoning{Start,End,MessageStart,MessageContent,MessageChunk,MessageEnd,EncryptedValue}Event
+```
+
+`StateSnapshotEvent` / `CustomEvent` are the targets for the `artifacts` field of
+[ADR-020](./adr.md), as [ADR-021](./adr.md) already anticipated.
+
+### The emission point already exists in our code
+
+[ADR-024](./adr.md) moved Generative UI capture into `OrchestratorTools.captureArtifacts`, which runs
+the instant a sub-agent returns. That is exactly the point in the flow where an incremental
+`STATE_SNAPSHOT` would be emitted — the hook a streaming implementation needs is already there, and
+it arrived for unrelated reasons.
+
+### What has NOT changed
+
+The blocker is still not the library. [ADR-014](./adr.md) binds identity to `SecurityContextHolder`,
+a `ThreadLocal`; under `.stream()` every tool call runs off the servlet thread and
+`getUserBearerToken()` throws. §3 ADR-B option **B1** (capture the token on the servlet thread,
+thread it explicitly) remains the prerequisite. Ship that before any transport work, or streaming
+trades a spinner for a security regression.
