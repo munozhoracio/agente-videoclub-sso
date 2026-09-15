@@ -20,6 +20,8 @@ Documentos de referencia: [`gateway-agent-integration.md`](./gateway-agent-integ
 * [ADR-020: Generative UI Híbrido con Extracción y Validación en el Servidor](#adr-020-generative-ui-híbrido-con-extracción-y-validación-en-el-servidor)
 * [ADR-021: Respuesta Bloqueante en vez de Streaming; AG-UI Evaluado y Diferido](#adr-021-respuesta-bloqueante-en-vez-de-streaming-ag-ui-evaluado-y-diferido)
 * [ADR-022: Jackson 3 (`tools.jackson`) como Único Mapper Inyectable bajo Spring Boot 4](#adr-022-jackson-3-toolsjackson-como-único-mapper-inyectable-bajo-spring-boot-4)
+* [ADR-023: Imagen Nativa GraalVM como Etapa Opcional y no como Reemplazo](#adr-023-imagen-nativa-graalvm-como-etapa-opcional-y-no-como-reemplazo)
+* [ADR-024: El Artefacto Generative UI se Captura antes del Orquestador](#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador)
 
 ---
 
@@ -206,9 +208,10 @@ En el turno 0 se siembra la memoria con el perfil del usuario (nombre, email, ro
 
 ### ADR-020: Generative UI Híbrido con Extracción y Validación en el Servidor
 
-* **Estado:** Aceptado e Implementado
+* **Estado:** Aceptado e Implementado — **enmendado por [ADR-024](#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador)**
 * **Fecha:** Septiembre 2026
 * **Reemplaza a:** la primera versión de este patrón, que parseaba el bloque estructurado en el **navegador**.
+* **Enmendado por:** [ADR-024](#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador). El invariante y el contrato `artifacts` siguen vigentes; lo que cambió es **dónde** se extrae el bloque. Lo que este ADR describe como extracción sobre el texto final del orquestador hoy es sólo un fallback.
 
 #### Contexto
 Presentar un catálogo como viñetas markdown (`- Título: X, Precio: Y`) desaprovecha el frontend. Reemplazar todo el diálogo por componentes es el antipatrón opuesto. La regla adoptada:
@@ -294,3 +297,85 @@ En este proyecto, todo componente que necesite un mapper **inyecta `tools.jackso
 * **Positivas:** Alineado con la auto-configuración del framework, sin beans manuales.
 * **Excepción documentada:** `TokenRelayService` usa `ObjectMapper` de Jackson 2, pero lo **construye** (`new ObjectMapper()`), no lo inyecta. Por eso nunca falló y se deja como está.
 * **Negativa — la lección:** los tests unitarios que construyen el mapper a mano **no detectan este fallo**: pasan verdes mientras el contexto revienta. Verificar el arranque real es parte de la definición de terminado, no un extra.
+
+---
+
+### ADR-023: Imagen Nativa GraalVM como Etapa Opcional y no como Reemplazo
+
+* **Estado:** Aceptado e Implementado
+* **Fecha:** Septiembre 2026
+
+#### Contexto
+El servicio se despliega como un `.jar` sobre `eclipse-temurin:25-jre-alpine` y arranca en **2,8–3,5 s**. Ese costo se paga en cada reinicio, en cada redeploy y en cada escalado. GraalVM permite compilar el mismo código a un ejecutable nativo que arranca en centésimas de segundo, a cambio de asumir un modelo de **mundo cerrado**: todo lo que se resuelva por reflexión debe declararse en tiempo de compilación.
+
+La vía documentada por Spring (`./mvnw spring-boot:build-image -Pnative`) no era aplicable: ese goal arma la imagen con Paketo buildpacks y necesita el daemon de Docker, algo imposible dentro de un build multi-stage.
+
+#### Decisión
+Agregar al `Dockerfile` existente **dos etapas opcionales** —`native-build` y `native-runtime`— que **conviven** con `dev`, `build` y `runtime` en lugar de reemplazarlas. La selección se hace por variable de entorno (`BUILD_TARGET`, con default `runtime`), de modo que el flujo JVM no cambia.
+
+La compilación se hace a mano en dos pasos y en este orden: `package` (que dispara el `process-aot` que el perfil `native` del parent agrega a `spring-boot-maven-plugin`) y luego `native:compile-no-fork` (el goal `native:compile` forkea el ciclo `package` y repetiría todo el primer paso).
+
+#### Justificación
+* **Arranque ~26× más rápido**: 0,10–0,12 s contra 2,8–3,5 s, medido sobre el mismo commit.
+* **Ambos modos siguen disponibles.** Nativo es un modelo de ejecución distinto, no una mejora gratuita; el equipo elige por entorno en vez de quedar casado con uno.
+* **Los hints son inertes en la JVM.** `NativeRuntimeHints` solo se procesa durante AOT (toda la maquinaria de `@ImportRuntimeHints` vive bajo `org.springframework.context.aot`), así que el soporte nativo no impone costo ni riesgo al camino JVM.
+* **El runtime nativo debe ser glibc.** La imagen de GraalVM es Oracle Linux; un binario linkeado contra glibc no arranca sobre Alpine (musl). De ahí `debian:bookworm-slim`.
+
+#### Consecuencias
+* **Positivas:** Arranque casi instantáneo, sin calentamiento de JIT y con menor consumo de memoria en ejecución. Habilita escalar a cero sin penalizar al primer request.
+* **Trade-off — compilar es caro:** ~2 min 30 s y un pico de **~8,9 GB de RAM**. Con poca memoria en el daemon, el build muere sin mensaje útil. El ciclo de feedback para depurar se vuelve lento.
+* **Trade-off — el tamaño casi no baja:** 452 MB contra 536 MB de la imagen JVM; el binario solo pesa 244 MB. La imagen nativa **no** es automáticamente liviana.
+* **Negativa — la clase de fallo que aparece:** en la primera puesta a punto, **cuatro** errores distintos, todos con la misma raíz: *falla lo que el compilador no puede ver estáticamente*. En orden de ejecución:
+  1. **Default de constante de interfaz.** `BaseAdvisor.DEFAULT_SCHEDULER = Schedulers.boundedElastic()` se resolvía a `null` → `scheduler cannot be null`. Se corrige pasando el scheduler explícitamente en código propio.
+  2. **Escaneo de anotaciones por reflexión.** Spring AI busca `@Tool` recorriendo los métodos del objeto → `No @Tool annotated methods found`. La clase cargaba, pero sus métodos eran invisibles.
+  3. **Deserialización manual con un mapper propio.** `GenerativeUiExtractor` liga `List<MovieItem>` fuera de toda firma que el AOT pueda leer → `Record components not available`.
+  4. **Tipo borrado por un comodín.** El handler está declarado `ResponseEntity<?>`, así que `ChatResponse` no aparece en ninguna firma y el AOT nunca lo registra. El comodín es deliberado (el mismo handler devuelve cuerpos `Map` de error), por lo que el hint es el arreglo correcto y no angostar el tipo de retorno.
+* **Lo que nunca falló:** los tipos que **sí** están declarados en una firma de controller (como `ChatRequest` en `@RequestBody`), porque el AOT los ve y los registra solo. El límite no es la reflexión en abstracto, sino la visibilidad estática.
+* **Práctica derivada:** verificar un hint leyendo `target/classes/META-INF/native-image/ar.unrn/videoclub-agent/reachability-metadata.json` **antes** de compilar. Convierte un ciclo de dos minutos y medio en uno de segundos. Spring Boot 4 genera ese archivo unificado; ya no existen los `reflect-config.json` separados.
+* **Alcance:** ninguno de estos fallos afecta a la JVM. Son el precio exacto del arranque en 0,1 s.
+
+---
+
+### ADR-024: El Artefacto Generative UI se Captura antes del Orquestador
+
+* **Estado:** Aceptado e Implementado
+* **Fecha:** Septiembre 2026
+* **Enmienda a:** [ADR-020](#adr-020-generative-ui-híbrido-con-extracción-y-validación-en-el-servidor). No cambia el contrato `artifacts` ni el invariante del fence; cambia **el punto del flujo donde se extrae**.
+
+#### Contexto
+[ADR-020](#adr-020-generative-ui-híbrido-con-extracción-y-validación-en-el-servidor) sacó el parseo del navegador y lo puso en el servidor, sobre el texto **final** del orquestador. Quedó un eslabón sin cubrir: el bloque emitido por el sub-agente todavía tenía que **atravesar al orquestador** para llegar a ese punto. La única defensa era una regla de prompt:
+
+> «PRESERVACIÓN DE ARTEFACTOS GENERATIVE UI: … debés PRESERVAR intacto ese bloque al final.»
+
+En producción dejó de cumplirse. Las tarjetas desaparecieron sin ningún error: `artifacts` llegaba vacío y el usuario veía viñetas markdown.
+
+El diagnóstico se hizo instrumentando `consultCatalogAgent` para registrar lo que devuelve el sub-agente **antes** de que el orquestador lo vea:
+
+* Log del sub-agente: `[fence present: true]`, con un bloque ` ```json:movies ` completo y bien formado (5 ítems, todos los campos).
+* Respuesta HTTP final: `"artifacts":[]` y el listado reescrito como `- **Matrix I** (Ciencia Ficción) - Precio: $200.00`.
+
+El bloque existía y se perdía **entre** el sub-agente y la respuesta. El único paso intermedio es el LLM orquestador. Se descartó además que fuera una regresión de [ADR-023](#adr-023-imagen-nativa-graalvm-como-etapa-opcional-y-no-como-reemplazo): el fallo se reproduce idéntico en JVM y sobre un `HEAD` limpio, sin ninguno de los cambios de imagen nativa.
+
+#### Decisión
+Extraer el bloque en `OrchestratorTools`, en el instante en que el sub-agente retorna, mediante el helper `captureArtifacts`:
+
+1. Se extrae con el mismo `GenerativeUiExtractor`.
+2. Los artifacts se registran en `ExecutionTracker` (que ya acumula agentes y tools del turno).
+3. **Al orquestador se le devuelve sólo la prosa, ya sin el fence.**
+
+`ExecutionTracker` pasa a ser la fuente autoritativa de `artifacts`. La extracción sobre el texto final se conserva por dos razones: sostener el invariante de que ningún fence llegue al cliente como prosa, y cubrir como fallback el camino sin delegación.
+
+La regla del prompt del orquestador se reescribió: pedía preservar un bloque que ya no recibe, y una instrucción imposible de cumplir es peor que ninguna. Ahora informa que las tarjetas las monta el sistema, que no puede romperlas, y que no repita atributos en el texto.
+
+#### Justificación
+* **«Preservá esto intacto» es un pedido, no una garantía.** El orquestador es un modelo de lenguaje cuyo trabajo *es* reescribir prosa; pedirle fidelidad literal compite contra su comportamiento por defecto. Funcionó un tiempo y dejó de funcionar sin que nadie tocara una línea: así fallan los pedidos a un LLM, en silencio y sin stack trace.
+* **No se puede destruir lo que nunca se recibió.** El fallo deja de ser improbable para volverse imposible por construcción — exactamente el criterio con el que [ADR-020](#adr-020-generative-ui-híbrido-con-extracción-y-validación-en-el-servidor) justificó mover el parseo al servidor. Esto aplica el mismo principio al eslabón que había quedado afuera.
+* **Sin nada específico de GraalVM.** Es Java puro y se comporta igual en JVM y en imagen nativa; los problemas de diseño se arreglan con diseño, no con hints.
+* **Se vuelve testeable sin gastar en el modelo.** `captureArtifacts` es una función sobre un `String`: un test puede fijar que el artifact queda en el tracker y que el texto sale limpio, sin llamar a OpenAI.
+
+#### Consecuencias
+* **Positivas:** Las tarjetas ya no dependen de la obediencia del orquestador. El texto final queda como corresponde — una introducción breve, sin viñetas ni JSON. Verificado en JVM y en imagen nativa.
+* **Negativa — la que importa:** el orquestador **deja de ver los datos estructurados**. Antes recibía el JSON y podía razonar sobre él; ahora sólo llega la frase introductoria del sub-agente. Una repregunta como *«¿cuánto sale la segunda?»* ya no se responde desde la memoria conversacional: obliga a delegar de nuevo. Es un costo real, aceptado a cambio de que las tarjetas no se pierdan nunca.
+* **Sobre la memoria:** por lo anterior, el historial guarda prosa sin los datos. Los turnos de seguimiento sobre entidades concretas cuestan una delegación adicional.
+* **`recordArtifacts` no deduplica**, a diferencia del resto del tracker: dos sub-agentes pueden aportar legítimamente dos artifacts en un mismo turno.
+* **Sigue abierta** la evolución que ya proponía [ADR-020](#adr-020-generative-ui-híbrido-con-extracción-y-validación-en-el-servidor): construir el artifact desde la salida **cruda** de la tool MCP, interceptada en `TrackingToolCallback`. Esto es un paso en esa dirección, no su llegada — el dato todavía pasa por el sub-agente, que puede transcribir mal un `id` o un `price`.

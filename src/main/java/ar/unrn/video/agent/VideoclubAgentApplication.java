@@ -1,13 +1,16 @@
 package ar.unrn.video.agent;
 
+import ar.unrn.video.agent.config.NativeRuntimeHints;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.ImportRuntimeHints;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
 @SpringBootApplication
+@ImportRuntimeHints(NativeRuntimeHints.class)
 public class VideoclubAgentApplication {
 
     public static void main(String[] args) {

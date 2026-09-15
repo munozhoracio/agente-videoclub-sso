@@ -90,6 +90,23 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <!--
+                El perfil `native` de spring-boot-starter-parent declara este plugin y el
+                execution `process-aot` SOLO dentro de <pluginManagement>. Sin esta
+                declaracion el perfil no tiene efecto: hay que traer el plugin al build
+                para que herede version (1.1.8), <extensions>true</extensions> y los
+                executions `add-reachability-metadata` / `process-aot` del parent.
+
+                No se compila nada nativo en un build normal: los goals solo corren con -Pnative.
+            -->
+            <plugin>
+                <groupId>org.graalvm.buildtools</groupId>
+                <artifactId>native-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Nombre fijo del binario, para que el COPY del Dockerfile sea deterministico. -->
+                    <imageName>videoclub-agent</imageName>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

@@ -38,6 +38,7 @@ build/
 !.env.example
 !.env.template
 !.env.prod.template
+!.env.prod.native.template
 
 # Local Pi runtime state
 .atl/

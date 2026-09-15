@@ -121,6 +121,64 @@ cp .env.prod.template .env.prod
 docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
+### 3. Producción Nativa (`target: native-runtime`)
+
+Variante **opcional** del mismo `Dockerfile`: compila el servicio a un ejecutable nativo con GraalVM en vez de correrlo sobre la JVM. No reemplaza a la etapa `runtime`; conviven.
+
+* **Etapa `native-build`**: `ghcr.io/graalvm/native-image-community:25`, compila con `native-maven-plugin`.
+* **Etapa `native-runtime`**: `debian:bookworm-slim`, usuario no-root, `HEALTHCHECK` con `start-period` corto.
+* **Selección**: las variables `BUILD_TARGET` e `IMAGE_SUFFIX` tienen valores por defecto (`runtime` y vacío), de modo que el comando JVM de arriba no cambia.
+
+```bash
+# Opción A: ad-hoc, con las variables en la misma línea
+BUILD_TARGET=native-runtime IMAGE_SUFFIX=-native \
+  docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+
+# Opción B: fijo, con su propio archivo de entorno
+cp .env.prod.native.template .env.prod.native
+docker compose --env-file .env.prod.native -f docker-compose.prod.yml up -d --build
+```
+
+> **No se usa `./mvnw spring-boot:build-image -Pnative`.** Ese goal arma la imagen con Paketo buildpacks y necesita hablar con el daemon de Docker, algo imposible dentro de un build multi-stage. La etapa `native-build` compila a mano en dos pasos: `package` (que dispara el `process-aot` de Spring) y luego `native:compile-no-fork`.
+
+#### Ventajas y desventajas (medidas en este proyecto)
+
+| | JVM (`runtime`) | Nativo (`native-runtime`) |
+| :--- | :--- | :--- |
+| **Arranque** | 2,8 – 3,5 s | **0,10 – 0,12 s** |
+| **Tamaño de imagen** | 536 MB | 452 MB |
+| **Tiempo de compilación** | segundos | **~2 min 30 s** |
+| **RAM pico al compilar** | normal | **~8,9 GB** |
+| **Errores de reflexión** | no existen | **aparecen en runtime** |
+
+**A favor**
+* **Arranque ~26× más rápido.** Es la diferencia entre un servicio que escala a cero y vuelve al instante, y uno que hace esperar al primer request.
+* **Sin calentamiento ni JIT**: el rendimiento es el mismo desde el primer request.
+* **Menor consumo de memoria en ejecución** al no haber heap de JVM ni metaespacio.
+
+**En contra**
+* **El tamaño casi no baja** (452 MB vs 536 MB). El binario solo ya pesa 244 MB: la imagen nativa no es automáticamente liviana. La base `debian:bookworm-slim` tampoco ayuda, pero es obligatoria (ver abajo).
+* **Compilar cuesta caro**: dos minutos y medio y ~9 GB de RAM. Si el daemon de Docker no tiene memoria suficiente, el build muere sin mensaje claro.
+* **Mundo cerrado**: todo lo que se resuelva por reflexión debe declararse en tiempo de compilación. Lo que la JVM descubre sobre la marcha, acá falla en runtime (ver [ADR-023](./docs/adr.md#adr-023-imagen-nativa-graalvm-como-etapa-opcional-y-no-como-reemplazo)).
+* **Ciclo de feedback lento** para depurar: cada intento cuesta una compilación completa.
+
+#### Por qué el runtime nativo es Debian y no Alpine
+
+La imagen de GraalVM está basada en Oracle Linux, o sea **glibc**. Alpine usa **musl**. Un binario compilado contra glibc **no arranca** sobre Alpine. La alternativa sería compilar con `--static --libc=musl`, lo que exige un toolchain musl en la etapa de build. Por eso la etapa `runtime` (JVM) sí usa Alpine y la `native-runtime` no.
+
+#### Hints de reflexión
+
+`config/NativeRuntimeHints.java` declara lo que el análisis estático no puede ver: los métodos `@Tool` del orquestador y los records que Jackson liga por fuera de una firma de controller. Es un **no-op en la JVM** — la clase solo se activa durante el procesamiento AOT.
+
+Para verificar un hint **sin pagar la compilación completa**:
+
+```bash
+./mvnw -Pnative clean package -DskipTests
+rg "OrchestratorTools" target/classes/META-INF/native-image/ar.unrn/videoclub-agent/reachability-metadata.json
+```
+
+> Spring Boot 4 genera un `reachability-metadata.json` unificado; ya **no** existen los antiguos `reflect-config.json`.
+
 ---
 
 ## Verificación End-to-End
@@ -189,7 +247,8 @@ flowchart TD
    - ChatClient aislado con system prompt experto en socios y permisos.
    - Conectado exclusivamente a herramientas MCP de socios (`get_socio`, `list_socios`).
 4. **`ExecutionTracker`**:
-   - Registra en tiempo de ejecución tanto los sub-agentes convocados (`agentsInvoked`) como las herramientas ejecutadas (`toolsExecuted`).
+   - Registra en tiempo de ejecución los sub-agentes convocados (`agentsInvoked`), las herramientas ejecutadas (`toolsExecuted`) y los artefactos Generative UI producidos (`artifacts`).
+   - **Los artefactos se capturan en `OrchestratorTools`**, en el momento en que el sub-agente retorna, y el orquestador recibe la prosa ya sin el bloque estructurado. Se hace así porque el orquestador es un modelo de lenguaje que reescribe prosa: se lo observó convirtiendo el bloque del sub-agente en viñetas markdown, destruyendo las tarjetas en silencio. No puede romper lo que nunca recibe (ver [ADR-024](./docs/adr.md#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador)).
 5. **`AbstractDomainSubAgent` (Base y Protección Fail-Fast)**:
    - Clase base abstracta que encapsula el filtrado de herramientas, el registro en el tracker y la ejecución del ChatClient.
    - **Fail-Fast contra Alucinaciones**: Si un sub-agente especializado detecta 0 herramientas MCP disponibles para su dominio, interrumpe de inmediato con `IllegalStateException` y log `ERROR`. Esto previene la degradación silenciosa donde el LLM respondería inventando datos falsos sin herramientas reales.

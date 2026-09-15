@@ -1,16 +1,23 @@
 # Entorno PRODUCTIVO. Se levanta explicitamente con -f y su propio archivo de variables:
 #   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 #
+# Variante con imagen nativa (GraalVM). Mismo archivo, otra etapa del Dockerfile:
+#   BUILD_TARGET=native-runtime IMAGE_SUFFIX=-native \
+#     docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+#
+# Ambas variables tienen default, asi que el comando JVM de arriba sigue igual que antes.
+# IMAGE_SUFFIX evita que la imagen nativa pise el tag de la JVM.
+#
 # `name: videoclub-prod` aisla el stack productivo en un namespace propio.
-name: videoclub-prod
+name: videoclub
 
 services:
     agent:
         build:
             context: .
             dockerfile: Dockerfile
-            target: runtime
-        image: videoclub-agent:${APP_VERSION}
+            target: ${BUILD_TARGET:-runtime}
+        image: videoclub-agent:${APP_VERSION}${IMAGE_SUFFIX:-}
         container_name: videoclub-agent-prod
         ports:
             - ${PORT}:${PORT}

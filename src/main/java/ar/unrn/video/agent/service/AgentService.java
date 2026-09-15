@@ -17,6 +17,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.Arrays;
 import java.util.List;
@@ -83,6 +84,7 @@ public class AgentService {
                 catalogSubAgent,
                 membershipSubAgent,
                 tracker,
+                generativeUiExtractor,
                 user.fullName()
         );
 
@@ -96,13 +98,21 @@ public class AgentService {
                 + "- Recordá y utilizá las respuestas anteriores de esta conversación para responder de forma coherente. "
                 + "- Para saludos de cortesía, presentaciones o preguntas generales sobre qué podés hacer, respondé directamente con amabilidad sin invocar a ningún sub-agente. "
                 + "- REGLA CRÍTICA DE DELEGACIÓN: Los sub-agentes NO tienen acceso a la memoria conversacional. Cada vez que invoques una herramienta de delegación, debés REFORMULAR la consulta de manera completamente AUTO-CONTENIDA, resolviendo pronombres, referencias implícitas y anáforas previas del historial. "
-                + "- PRESERVACIÓN DE ARTEFACTOS GENERATIVE UI: Si la respuesta de un sub-agente incluye un bloque estructurado delimitado (por ejemplo ```json:movies [...] ```), debés PRESERVAR intacto ese bloque al final. NUNCA dupliques ni repitas en viñetas los datos o fichas de las películas en tu texto (sin listas de título, precio, género o imágenes), ya que el frontend monta las tarjetas interactivas automáticamente. Tu texto debe ser solo una introducción breve, natural y amigable. "
+                + "- TARJETAS INTERACTIVAS: las fichas de las películas las monta el sistema por fuera de tu texto, a partir de los datos que ya capturó del sub-agente. No necesitás hacer nada para que aparezcan y no podés romperlas. NUNCA escribas bloques JSON ni repitas en viñetas los datos o fichas de las películas (sin listas de título, precio, género o imágenes), porque el usuario los vería duplicados: una vez en tu texto y otra en las tarjetas. Tu texto debe ser solo una introducción breve, natural y amigable. "
                 + "- Si una consulta requiere ambos dominios, podés invocar a ambos sub-agentes y consolidar una respuesta integrada. "
                 + "- Respondé siempre en español de forma clara, natural, profesional y precisa.",
                 user.fullName(), user.username(), user.email(), user.roles()
         );
 
-        final MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
+        // El scheduler se pasa EXPLICITAMENTE, no por omision. El default del builder es
+        // BaseAdvisor.DEFAULT_SCHEDULER, una constante de interfaz inicializada con
+        // Schedulers.boundedElastic(). En GraalVM native image esa constante se resuelve a
+        // null (la inicializacion de clases ocurre en tiempo de compilacion) y el
+        // constructor del advisor falla con "scheduler cannot be null". Llamar al metodo
+        // aca lo resuelve en runtime y se comporta igual en JVM y en nativo.
+        final MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory)
+                .scheduler(Schedulers.boundedElastic())
+                .build();
 
         final String response = chatClientBuilder.build().prompt()
                 .system(systemPrompt)
@@ -124,11 +134,20 @@ public class AgentService {
         log.info("Turn completed for conversationId: {}. Agents: {}, Tools: {}, Denied: {}, FromMemory: {}",
                 conversationId, agentsInvoked, toolsExecuted, toolsDenied, fromMemory);
 
-        // The structured blocks leave the text here, so no client ever has to parse prose.
+        // Still extracted from the final text, but now only to enforce the invariant that no
+        // fence ever reaches a client as prose. The artifacts that matter were already captured
+        // in OrchestratorTools, before the orchestrator could rewrite them away.
         final GenerativeUiExtractor.ExtractionResult extraction = generativeUiExtractor.extract(response);
 
+        // The tracker is authoritative. The final text is a fallback for the single-agent path,
+        // where no delegation happened and the orchestrator answered with a block of its own.
+        final List<UiArtifact> capturedArtifacts = tracker.getArtifacts();
+        final List<UiArtifact> artifacts = capturedArtifacts.isEmpty()
+                ? extraction.artifacts()
+                : capturedArtifacts;
+
         return new ChatResult(extraction.text(), conversationId, agentsInvoked, toolsExecuted, toolsDenied,
-                toolsAvailable, fromMemory, extraction.artifacts());
+                toolsAvailable, fromMemory, artifacts);
     }
 
     /**
