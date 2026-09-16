@@ -8,8 +8,8 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:9091/realms/videoclub}
-          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:9091/realms/videoclub/protocol/openid-connect/certs}
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:9090/realms/videoclub}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:9090/realms/videoclub/protocol/openid-connect/certs}
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:demo-key}
@@ -25,7 +25,7 @@ videoclub:
     catalog-url: ${CATALOG_MCP_URL:http://localhost:8081/mcp}
     membership-url: ${MEMBERSHIP_MCP_URL:http://localhost:8082/mcp}
   keycloak:
-    token-url: ${KEYCLOAK_TOKEN_URL:http://localhost:9091/realms/videoclub/protocol/openid-connect/token}
+    token-url: ${KEYCLOAK_TOKEN_URL:http://localhost:9090/realms/videoclub/protocol/openid-connect/token}
     client-id: ${KEYCLOAK_CLIENT_ID:videoclub-backend}
     client-secret: ${KEYCLOAK_CLIENT_SECRET:dstNSsANvqlaGfZCJa1mcYzP1EBAYP4N}
 

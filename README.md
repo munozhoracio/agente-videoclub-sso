@@ -1,13 +1,16 @@
 # VideoClub AI Agent Microservice
 
-Spring Boot 4 + Spring AI microservice that acts as an intelligent assistant for the VideoClub ecosystem. It discovers and executes Model Context Protocol (MCP) tools provided by `springboot-sso` under Keycloak SSO authentication.
+Spring Boot 4 + Spring AI microservice that acts as an intelligent assistant for the VideoClub ecosystem. It discovers and executes Model Context Protocol (MCP) tools provided by the `springboot-sso` domain services under Keycloak SSO authentication.
+
+> [!IMPORTANT]
+> **El backend se separó en dos microservicios, y el agente ahora mantiene un cliente MCP por cada uno:** `catalog-service` (`:8081`) y `membership-service` (`:8082`). La variable `VIDEOCLUB_MCP_URL` fue reemplazada por `CATALOG_MCP_URL` y `MEMBERSHIP_MCP_URL`.
 
 ---
 
 ## Features
 
 * **Spring AI & OpenAI**: Natural language processing with tool-calling capabilities.
-* **MCP Client**: Dynamic tool discovery and execution via Streamable HTTP (`/mcp`).
+* **Dual MCP Client**: One dedicated client per domain service, so a sub-agent can only reach the tools of its own domain. Dynamic discovery over Streamable HTTP (`/mcp`).
 * **Keycloak Authentication**: Secure service-to-service and user-authenticated calls.
 * **REST Testing Suite**: Ready-to-run `.http` suite in [requests/agent.http](./requests/agent.http).
 
@@ -36,24 +39,27 @@ flowchart TD
     subgraph DockerNet["Docker Network: videoclub_default"]
         Gateway["videoclub-gateway<br/>(Spring Cloud Gateway :9500)"]
         Agent["agent (:8085)<br/>(videoclub-agent)"]
-        Keycloak["video-keycloak<br/>(keycloak:8080)<br/>iss: localhost:9091"]
-    end
-
-    subgraph Host["Host Machine (Desarrollo)"]
-        Backend["springboot-sso<br/>(Backend & MCP Server :8080)"]
+        Keycloak["video-keycloak<br/>(keycloak:8080)<br/>iss: localhost:9090"]
+        Catalog["catalog (:8081)<br/>REST + MCP Server"]
+        Membership["membership (:8082)<br/>REST + MCP Server"]
     end
 
     Browser -->|"http://localhost:9500"| Gateway
     Gateway -->|"Route /api/agent/**"| Agent
-    Gateway -->|"host.docker.internal:8080"| Backend
+    Gateway -->|"/movies/**"| Catalog
+    Gateway -->|"/api/socios/** /api/users/**"| Membership
     Agent -->|"JWKS & Token (keycloak:8080)"| Keycloak
-    Agent -->|"MCP Tools (host.docker.internal:8080/mcp)"| Backend
+    Agent -->|"MCP Tools (catalog:8081/mcp)"| Catalog
+    Agent -->|"MCP Tools (membership:8082/mcp)"| Membership
 ```
 
 ### Reglas de Comunicación
 1. **Gateway ➔ Agent**: El Gateway enruta `/api/agent/**` a `http://agent:8085` usando la resolución DNS interna de Docker.
 2. **Agent ➔ Keycloak**: El agente consume los endpoints de JWKS y Token directamente por la red de Docker en `http://keycloak:8080`.
-3. **Agent ➔ Backend (MCP)**: El agente invoca las herramientas MCP en `http://host.docker.internal:8080/mcp` saliendo hacia el host donde corre `./mvnw spring-boot:run`.
+3. **Agent ➔ Servicios de dominio (MCP)**: El agente mantiene **dos** clientes MCP y los invoca por DNS interno de Docker: `http://catalog:8081/mcp` y `http://membership:8082/mcp`. Los hostnames son las claves de servicio de los compose de `springboot-sso`.
+
+> [!NOTE]
+> Este tráfico es **norte-sur**: el agente es un *cliente* del ecosistema, no un servicio de dominio par. Entre `catalog-service` y `membership-service` no hay HTTP — se comunican por el bus de RabbitMQ (ver ADR-014 de la plataforma).
 
 ---
 
@@ -70,7 +76,7 @@ extra_hosts:
 * **En Docker nativo sobre Linux**: Este hostname **no existe** por defecto. La directiva `extra_hosts` inyecta en el `/etc/hosts` del contenedor la IP del gateway del bridge Docker (usualmente `172.17.0.1`), permitiendo que el contenedor alcance servicios que corren directamente en el host del desarrollador.
 
 ### ¿Cuándo dejará de ser necesario?
-Actualmente, `springboot-sso` corre en el host con `./mvnw spring-boot:run`. El día que `springboot-sso` se ejecute dentro de un contenedor en la red `videoclub_default` (por ejemplo con servicio `backend`), la URL pasará a ser `http://backend:8080/mcp` y la directiva `extra_hosts` podrá removerse por completo.
+**Ese día ya llegó.** `catalog-service` y `membership-service` ahora corren como contenedores dentro de `videoclub_default`, y el agente los alcanza por DNS interno (`catalog:8081`, `membership:8082`) sin pasar por el host. `extra_hosts` se conserva solo por si se levanta algún servicio a mano con `./mvnw spring-boot:run` durante el desarrollo; para el camino normal ya no hace falta.
 
 ---
 
@@ -79,11 +85,11 @@ Actualmente, `springboot-sso` corre en el host con `./mvnw spring-boot:run`. El 
 Para que Spring Security en todos los servicios valide los JWTs de manera uniforme provengan del navegador, del gateway o de llamadas internas de red, Keycloak en `springboot-sso/docker/keycloak.yaml` fija su hostname canónico:
 
 ```yaml
-KC_HOSTNAME: "http://localhost:${KEYCLOAK_PORT:-9091}"
+KC_HOSTNAME: "http://localhost:${KEYCLOAK_PORT:-9090}"
 KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "false"
 ```
 
-* **Validación (`KEYCLOAK_ISSUER_URI`)**: `http://localhost:9091/realms/videoclub` (coincide exactamente con el claim `"iss"` del JWT).
+* **Validación (`KEYCLOAK_ISSUER_URI`)**: `http://localhost:9090/realms/videoclub` (coincide exactamente con el claim `"iss"` del JWT).
 * **Llamadas HTTP salientes (`KEYCLOAK_JWK_SET_URI`, `KEYCLOAK_TOKEN_URL`)**: `http://keycloak:8080/...` (tráfico interno eficiente en Docker).
 
 ---
@@ -196,7 +202,7 @@ curl -i http://localhost:9500/api/agent/health
 ### 2. Consulta al Agente con Token de Usuario
 ```bash
 # Obtener token de Keycloak
-USER_TOKEN=$(curl -s -X POST "http://localhost:9091/realms/videoclub/protocol/openid-connect/token" \
+USER_TOKEN=$(curl -s -X POST "http://localhost:9090/realms/videoclub/protocol/openid-connect/token" \
   -d "client_id=videoclub-frontend" \
   -d "username=usuariocliente" \
   -d "password=usuariocliente" \
@@ -227,16 +233,16 @@ flowchart TD
     Supervisor -->|"@Tool consultCatalogAgent"| CatalogSubAgent["CatalogSubAgent<br/>(ChatClient experto en catálogo)"]
     Supervisor -->|"@Tool consultMembershipAgent"| MembershipSubAgent["MembershipSubAgent<br/>(ChatClient experto en membresías)"]
 
-    subgraph MCPCatalog["Herramientas MCP de Catálogo"]
-        ToolsCatalog["list_movies<br/>get_movie<br/>search_movies"]
+    subgraph MCPCatalog["catalog-service :8081/mcp"]
+        ToolsCatalog["list_movies<br/>get_movie<br/>search_movies<br/>create_movie"]
     end
 
-    subgraph MCPMembership["Herramientas MCP de Socios"]
+    subgraph MCPMembership["membership-service :8082/mcp"]
         ToolsMembership["get_socio<br/>list_socios"]
     end
 
-    CatalogSubAgent -->|"Ejecuta solo herramientas de películas"| ToolsCatalog
-    MembershipSubAgent -->|"Ejecuta solo herramientas de socios"| ToolsMembership
+    CatalogSubAgent -->|"@Qualifier(catalogTools)"| ToolsCatalog
+    MembershipSubAgent -->|"@Qualifier(membershipTools)"| ToolsMembership
 ```
 
 ### Componentes:
@@ -246,19 +252,23 @@ flowchart TD
    - Cuenta con herramientas de delegación `@Tool` (`consultCatalogAgent`, `consultMembershipAgent`).
 2. **`CatalogSubAgent` (Especialista en Catálogo)**:
    - ChatClient aislado con system prompt experto en películas.
-   - Conectado exclusivamente a herramientas MCP de películas (`list_movies`, `get_movie`, `search_movies`).
+   - Recibe `@Qualifier("catalogTools")`, un provider atado **solo** al cliente MCP de `catalog-service`: `list_movies`, `get_movie`, `search_movies`, `create_movie`.
 3. **`MembershipSubAgent` (Especialista en Membresías y Socios)**:
    - ChatClient aislado con system prompt experto en socios y permisos.
-   - Conectado exclusivamente a herramientas MCP de socios (`get_socio`, `list_socios`).
+   - Recibe `@Qualifier("membershipTools")`, atado **solo** al cliente de `membership-service`: `get_socio`, `list_socios`.
 4. **`ExecutionTracker`**:
    - Registra en tiempo de ejecución los sub-agentes convocados (`agentsInvoked`), las herramientas ejecutadas (`toolsExecuted`) y los artefactos Generative UI producidos (`artifacts`).
    - **Los artefactos se capturan en `OrchestratorTools`**, en el momento en que el sub-agente retorna, y el orquestador recibe la prosa ya sin el bloque estructurado. Se hace así porque el orquestador es un modelo de lenguaje que reescribe prosa: se lo observó convirtiendo el bloque del sub-agente en viñetas markdown, destruyendo las tarjetas en silencio. No puede romper lo que nunca recibe (ver [ADR-024](./docs/adr.md#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador)).
 5. **`AbstractDomainSubAgent` (Base y Protección Fail-Fast)**:
    - Clase base abstracta que encapsula el filtrado de herramientas, el registro en el tracker y la ejecución del ChatClient.
    - **Fail-Fast contra Alucinaciones**: Si un sub-agente especializado detecta 0 herramientas MCP disponibles para su dominio, interrumpe de inmediato con `IllegalStateException` y log `ERROR`. Esto previene la degradación silenciosa donde el LLM respondería inventando datos falsos sin herramientas reales.
-6. **Resolución de Anáforas en la Delegación (Context-Preserving Rewording)**:
+6. **`McpClientConfiguration` (Un cliente por servicio)**:
+   - Publica cinco beans: un `McpSyncClient` por backend, un `SyncMcpToolCallbackProvider` con `@Qualifier` para cada uno, y un tercero `@Primary` que agrega ambos — el que inyecta `AgentService` por tipo para responder `GET /api/agent/tools` con las 6 tools. **Sin ese `@Primary` el arranque muere con `NoUniqueBeanDefinitionException`.**
+   - **Cada cliente tiene su propia ventana de descubrimiento** (`AtomicBoolean` local). Compartir una sola haría que el `initialize()` del segundo cliente encontrara la ventana ya cerrada por el `finally` del primero, y el handshake de arranque fallaría.
+   - Un servicio caído al arrancar se tolera con un `warn` por cliente; la sesión se recupera perezosamente en el primer request autenticado. El log identifica **cuál** de los dos falló.
+7. **Resolución de Anáforas en la Delegación (Context-Preserving Rewording)**:
    - Los sub-agentes se mantienen *stateless* y enfocados en su dominio. Para preservar el contexto conversacional sin duplicar la memoria, el orquestador (`AgentService`) reformula la consulta en el parámetro `query` de forma 100% auto-contenida, resolviendo referencias previas y pronombres antes de invocar la tool.
-7. **Resiliencia y Mapeo de Errores (`AgentController`)**:
+8. **Resiliencia y Mapeo de Errores (`AgentController`)**:
    - Excepciones de falta de token o JWT inválido se mapean a `401 Unauthorized`.
    - Ausencia o fallo de herramientas de dominio se mapea a `503 Service Unavailable`.
    - Sanitización de errores 500 para evitar fugas de trazas y nombres de clases internas.
