@@ -10,6 +10,7 @@ spring:
         jwt:
           issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:9090/realms/videoclub}
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:9090/realms/videoclub/protocol/openid-connect/certs}
+  
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:demo-key}
@@ -17,6 +18,20 @@ spring:
         options:
           model: ${OPENAI_MODEL:gpt-4o-mini}
           temperature: 0.2
+
+    chat:
+      observations:
+        log-prompt: true
+        log-completion: true
+
+      client:
+        observations:
+          log-prompt: true
+          log-completion: true
+
+    tools:
+      observations:
+        include-content: true
 
 videoclub:
   mcp:
@@ -35,3 +50,25 @@ logging:
     org.springframework.security: INFO
     org.springframework.ai: INFO
     io.modelcontextprotocol: INFO
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: ${LANGSMITH_SAMPLING_PROBABILITY:1.0}
+
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${LANGSMITH_ENDPOINT:https://api.smith.langchain.com}/otel/v1/traces
+          headers:
+            x-api-key: ${LANGSMITH_API_KEY}
+            Langsmith-Project: ${LANGSMITH_PROJECT:videoclub}
+          transport: http
+          timeout: 30s
+
+  otlp:
+    metrics:
+      export:
+        enabled: false

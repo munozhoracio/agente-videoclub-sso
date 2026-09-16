@@ -17,7 +17,7 @@ public class CatalogSubAgent extends AbstractDomainSubAgent {
 
     public static final Set<String> CATALOG_TOOL_NAMES = Set.of(
             "list_movies",
-            "get_movie",
+             "get_movie",
             "search_movies",
             "create_movie"
     );

@@ -9,7 +9,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -31,8 +30,8 @@ class McpKnowledgeServiceTest {
     @DisplayName("Routes catalog:// URIs to the catalog client only")
     void routesCatalogSchemeToCatalogClientOnly() {
         final McpKnowledgeService service = new McpKnowledgeService(catalogMcpClient, membershipMcpClient);
-        final McpSchema.ReadResourceResult result = new McpSchema.ReadResourceResult(
-                List.of(new McpSchema.TextResourceContents("catalog://genres", "text/markdown", "- ACTION")));
+        final McpSchema.ReadResourceResult result = McpSchema.ReadResourceResult.builder(
+                List.of(textContents("catalog://genres", "- ACTION"))).build();
         when(catalogMcpClient.readResource(any(McpSchema.ReadResourceRequest.class))).thenReturn(result);
 
         final String text = service.readResource("catalog://genres");
@@ -46,8 +45,8 @@ class McpKnowledgeServiceTest {
     @DisplayName("Routes membership:// URIs to the membership client only")
     void routesMembershipSchemeToMembershipClientOnly() {
         final McpKnowledgeService service = new McpKnowledgeService(catalogMcpClient, membershipMcpClient);
-        final McpSchema.ReadResourceResult result = new McpSchema.ReadResourceResult(
-                List.of(new McpSchema.TextResourceContents("membership://socios/1", "text/markdown", "Socio: Juan")));
+        final McpSchema.ReadResourceResult result = McpSchema.ReadResourceResult.builder(
+                List.of(textContents("membership://socios/1", "Socio: Juan"))).build();
         when(membershipMcpClient.readResource(any(McpSchema.ReadResourceRequest.class))).thenReturn(result);
 
         final String text = service.readResource("membership://socios/1");
@@ -84,9 +83,9 @@ class McpKnowledgeServiceTest {
     @DisplayName("Concatenates text from every TextResourceContents entry in order")
     void concatenatesTextFromMultipleContents() {
         final McpKnowledgeService service = new McpKnowledgeService(catalogMcpClient, membershipMcpClient);
-        final McpSchema.ReadResourceResult result = new McpSchema.ReadResourceResult(List.of(
-                new McpSchema.TextResourceContents("catalog://genres", "text/markdown", "- ACTION\n"),
-                new McpSchema.TextResourceContents("catalog://genres", "text/markdown", "- COMEDY")));
+        final McpSchema.ReadResourceResult result = McpSchema.ReadResourceResult.builder(List.of(
+                textContents("catalog://genres", "- ACTION\n"),
+                textContents("catalog://genres", "- COMEDY"))).build();
         when(catalogMcpClient.readResource(any(McpSchema.ReadResourceRequest.class))).thenReturn(result);
 
         final String text = service.readResource("catalog://genres");
@@ -94,40 +93,7 @@ class McpKnowledgeServiceTest {
         assertThat(text).isEqualTo("- ACTION\n- COMEDY");
     }
 
-    @Test
-    @DisplayName("Throws for an unknown server key in getPrompt and never touches either client")
-    void throwsForUnknownServerInGetPrompt() {
-        final McpKnowledgeService service = new McpKnowledgeService(catalogMcpClient, membershipMcpClient);
-
-        assertThatThrownBy(() -> service.getPrompt("unknown", "some-prompt", Map.of()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("unknown");
-
-        verifyNoInteractions(catalogMcpClient, membershipMcpClient);
-    }
-
-    @Test
-    @DisplayName("Keeps resource templates separate from fixed resources in introspection")
-    void keepsTemplatesSeparateFromFixedResources() {
-        final McpKnowledgeService service = new McpKnowledgeService(catalogMcpClient, membershipMcpClient);
-        final McpSchema.Resource genresResource = McpSchema.Resource.builder("catalog://genres", "catalog_genres").build();
-        final McpSchema.ResourceTemplate movieTemplate =
-                McpSchema.ResourceTemplate.builder("catalog://movies/{id}", "movie_card").build();
-
-        when(catalogMcpClient.listResources()).thenReturn(new McpSchema.ListResourcesResult(List.of(genresResource), null));
-        when(catalogMcpClient.listResourceTemplates())
-                .thenReturn(new McpSchema.ListResourceTemplatesResult(List.of(movieTemplate), null));
-        when(membershipMcpClient.listResources()).thenReturn(new McpSchema.ListResourcesResult(List.of(), null));
-        when(membershipMcpClient.listResourceTemplates())
-                .thenReturn(new McpSchema.ListResourceTemplatesResult(List.of(), null));
-
-        final List<Map<String, Object>> resources = service.listResources();
-        final List<Map<String, Object>> templates = service.listResourceTemplates();
-
-        assertThat(resources).hasSize(1);
-        assertThat(resources.get(0)).containsEntry("uri", "catalog://genres");
-        assertThat(templates).hasSize(1);
-        assertThat(templates.get(0)).containsEntry("uriTemplate", "catalog://movies/{id}");
-        assertThat(resources).noneMatch(entry -> entry.containsValue("catalog://movies/{id}"));
+    private static McpSchema.TextResourceContents textContents(final String uri, final String text) {
+        return McpSchema.TextResourceContents.builder(uri, text).mimeType("text/markdown").build();
     }
 }

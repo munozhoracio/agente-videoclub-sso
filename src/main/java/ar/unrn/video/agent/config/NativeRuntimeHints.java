@@ -8,6 +8,7 @@ import org.springframework.aot.hint.BindingReflectionHintsRegistrar;
 import org.springframework.aot.hint.MemberCategory;
 import org.springframework.aot.hint.RuntimeHints;
 import org.springframework.aot.hint.RuntimeHintsRegistrar;
+import org.springframework.aot.hint.TypeReference;
 
 /**
  * Reflection hints required by the GraalVM native image.
@@ -60,5 +61,12 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
                 UiArtifact.class,
                 AgentController.ChatRequest.class,
                 AgentController.ChatResponse.class);
+
+        // OpenTelemetry / Protobuf reflection hint.
+        // com.google.protobuf.ExtensionRegistry.getEmptyRegistry() is invoked reflectively
+        // by ExtensionRegistryFactory when protobuf classes are loaded.
+        hints.reflection().registerType(
+                TypeReference.of("com.google.protobuf.ExtensionRegistry"),
+                MemberCategory.INVOKE_PUBLIC_METHODS);
     }
 }
