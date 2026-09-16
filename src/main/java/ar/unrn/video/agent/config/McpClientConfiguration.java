@@ -8,14 +8,33 @@ import io.modelcontextprotocol.common.McpTransportContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Wires one MCP client per backend service.
+ *
+ * <p>The VideoClub backend used to be a single server exposing every tool. It is now two
+ * independent services — catalog-service and membership-service — each with its own MCP
+ * endpoint, so there are two clients here instead of one. Everything about how a client
+ * relays the caller's identity is unchanged; see {@link #buildClient} for that mechanism.
+ *
+ * <p>Three {@link SyncMcpToolCallbackProvider} beans are published:
+ * <ul>
+ *   <li>{@code catalogTools} and {@code membershipTools}, each bound to one service, so a
+ *       sub-agent can only reach the tools of its own domain;</li>
+ *   <li>a {@code @Primary} aggregate over both, which is what {@code AgentService} injects by
+ *       type to answer {@code GET /api/agent/tools}. Without the {@code @Primary} marker that
+ *       injection point becomes ambiguous and the context fails to start.</li>
+ * </ul>
+ */
 @Configuration
 public class McpClientConfiguration {
 
@@ -24,8 +43,22 @@ public class McpClientConfiguration {
     /** Key under which the caller's JWT travels inside the MCP transport context. */
     private static final String CALLER_TOKEN_KEY = "videoclub.caller-token";
 
+    @Bean(destroyMethod = "close")
+    public McpSyncClient catalogMcpClient(
+            @Value("${videoclub.mcp.catalog-url}") final String mcpUrl,
+            final TokenRelayService tokenRelayService) {
+        return buildClient("catalog-service", mcpUrl, tokenRelayService);
+    }
+
+    @Bean(destroyMethod = "close")
+    public McpSyncClient membershipMcpClient(
+            @Value("${videoclub.mcp.membership-url}") final String mcpUrl,
+            final TokenRelayService tokenRelayService) {
+        return buildClient("membership-service", mcpUrl, tokenRelayService);
+    }
+
     /**
-     * Builds the MCP client used for every outbound call to the VideoClub MCP server.
+     * Builds the MCP client used for every outbound call to one VideoClub MCP server.
      *
      * <h2>Carrying the caller's identity across threads</h2>
      *
@@ -46,28 +79,35 @@ public class McpClientConfiguration {
      *
      * <p>One transport serves two kinds of request with two different identities. The
      * {@code discoveryWindow} flag separates them, and it is open for exactly one moment: the
-     * {@code initialize()} handshake below, which runs while this {@code @Bean} is still being
-     * created. No HTTP endpoint is serving yet at that point, so no user request can slip through
-     * the window; the {@code finally} block closes it permanently before the context finishes
-     * refreshing.
+     * {@code initialize()} handshake below, which runs while the calling {@code @Bean} method is
+     * still executing. No HTTP endpoint is serving yet at that point, so no user request can slip
+     * through the window; the {@code finally} block closes it permanently before the context
+     * finishes refreshing.
+     *
+     * <p><strong>The flag is local to this method on purpose, so each client owns its own.</strong>
+     * A single shared flag would be closed by whichever client initialized first, and the second
+     * client's own {@code initialize()} would then fall through to
+     * {@link TokenRelayService#getUserBearerToken()} — which throws, because there is no caller at
+     * startup. Two clients, two windows.
      *
      * <p>After that, only a captured caller token is accepted. When there is none and the window is
      * closed, {@link TokenRelayService#getUserBearerToken()} throws — the call fails instead of
      * silently running as the service account.
      *
-     * <p>A failed startup handshake is logged and tolerated rather than fatal. Tool discovery is
-     * lazy — {@code SyncMcpToolCallbackProvider} caches callbacks on first use, which happens on a
-     * user request — so the first caller's own token recovers the session if Keycloak or the MCP
-     * server was unreachable at boot. That recovery is exactly the path that the captured context
-     * makes reliable: the re-initialization runs under the identity of whoever triggered it, no
-     * matter which worker thread ends up sending its requests.
+     * <p>A failed startup handshake is logged and tolerated rather than fatal, per client: one
+     * service being down at boot must not take the agent with it. Tool discovery is lazy —
+     * {@code SyncMcpToolCallbackProvider} caches callbacks on first use, which happens on a user
+     * request — so the first caller's own token recovers the session if Keycloak or that MCP server
+     * was unreachable at boot. That recovery is exactly the path that the captured context makes
+     * reliable: the re-initialization runs under the identity of whoever triggered it, no matter
+     * which worker thread ends up sending its requests. The {@code serviceName} in every log line
+     * is what tells the two clients apart when only one of them failed.
      */
-    @Bean(destroyMethod = "close")
-    public McpSyncClient mcpSyncClient(
-            @Value("${videoclub.mcp.url}") final String mcpUrl,
-            final TokenRelayService tokenRelayService) {
+    private static McpSyncClient buildClient(final String serviceName,
+                                             final String mcpUrl,
+                                             final TokenRelayService tokenRelayService) {
 
-        log.info("Configuring MCP Sync Client for VideoClub at {}", mcpUrl);
+        log.info("Configuring MCP Sync Client for {} at {}", serviceName, mcpUrl);
 
         final AtomicBoolean discoveryWindow = new AtomicBoolean(true);
 
@@ -86,15 +126,17 @@ public class McpClientConfiguration {
                 .build();
 
         try {
-            log.info("Initializing MCP session with VideoClub server using the service account...");
+            log.info("Initializing MCP session with {} using the service account...", serviceName);
             client.initialize();
-            log.info("MCP session initialized successfully");
+            log.info("MCP session with {} initialized successfully", serviceName);
         } catch (Exception e) {
-            log.warn("Could not initialize MCP session at startup: {}. "
-                    + "The session will be established on the first authenticated request.", e.getMessage());
+            log.warn("Could not initialize MCP session with {} at startup: {}. "
+                    + "The session will be established on the first authenticated request.",
+                    serviceName, e.getMessage());
         } finally {
             discoveryWindow.set(false);
-            log.info("Discovery window closed; every further MCP call relays the caller's own token");
+            log.info("Discovery window for {} closed; every further MCP call relays the caller's own token",
+                    serviceName);
         }
 
         return client;
@@ -133,9 +175,31 @@ public class McpClientConfiguration {
     }
 
     @Bean
-    public SyncMcpToolCallbackProvider mcpToolCallbackProvider(final McpSyncClient mcpSyncClient) {
+    @Qualifier("catalogTools")
+    public SyncMcpToolCallbackProvider catalogToolCallbackProvider(final McpSyncClient catalogMcpClient) {
         return SyncMcpToolCallbackProvider.builder()
-                .mcpClients(mcpSyncClient)
+                .mcpClients(catalogMcpClient)
+                .build();
+    }
+
+    @Bean
+    @Qualifier("membershipTools")
+    public SyncMcpToolCallbackProvider membershipToolCallbackProvider(final McpSyncClient membershipMcpClient) {
+        return SyncMcpToolCallbackProvider.builder()
+                .mcpClients(membershipMcpClient)
+                .build();
+    }
+
+    /**
+     * Every tool of both services, for the callers that legitimately want the whole inventory —
+     * today, {@code AgentService} serving {@code GET /api/agent/tools}.
+     */
+    @Bean
+    @Primary
+    public SyncMcpToolCallbackProvider allToolCallbackProvider(final McpSyncClient catalogMcpClient,
+                                                               final McpSyncClient membershipMcpClient) {
+        return SyncMcpToolCallbackProvider.builder()
+                .mcpClients(catalogMcpClient, membershipMcpClient)
                 .build();
     }
 }

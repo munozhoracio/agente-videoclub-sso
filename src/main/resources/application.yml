@@ -20,7 +20,10 @@ spring:
 
 videoclub:
   mcp:
-    url: ${VIDEOCLUB_MCP_URL:http://localhost:8080/mcp}
+    # Un endpoint MCP por servicio: el backend se separo en catalog-service y
+    # membership-service, cada uno con sus propias herramientas.
+    catalog-url: ${CATALOG_MCP_URL:http://localhost:8081/mcp}
+    membership-url: ${MEMBERSHIP_MCP_URL:http://localhost:8082/mcp}
   keycloak:
     token-url: ${KEYCLOAK_TOKEN_URL:http://localhost:9091/realms/videoclub/protocol/openid-connect/token}
     client-id: ${KEYCLOAK_CLIENT_ID:videoclub-backend}

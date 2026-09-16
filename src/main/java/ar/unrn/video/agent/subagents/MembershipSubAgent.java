@@ -2,6 +2,7 @@ package ar.unrn.video.agent.subagents;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
@@ -20,7 +21,7 @@ public class MembershipSubAgent extends AbstractDomainSubAgent {
 
     public MembershipSubAgent(
             final ChatClient.Builder chatClientBuilder,
-            final SyncMcpToolCallbackProvider toolCallbackProvider) {
+            @Qualifier("membershipTools") final SyncMcpToolCallbackProvider toolCallbackProvider) {
         super("MembershipSubAgent", "Socios y Membresías", MEMBERSHIP_TOOL_NAMES, chatClientBuilder, toolCallbackProvider);
     }
 
