@@ -252,15 +252,15 @@ flowchart TD
    - Cuenta con herramientas de delegación `@Tool` (`consultCatalogAgent`, `consultMembershipAgent`).
 2. **`CatalogSubAgent` (Especialista en Catálogo)**:
    - ChatClient aislado con system prompt experto en películas.
-   - Recibe `@Qualifier("catalogTools")`, un provider atado **solo** al cliente MCP de `catalog-service`: `list_movies`, `get_movie`, `search_movies`, `create_movie`.
+   - Recibe `@Qualifier("catalogTools")`, un provider atado **solo** al cliente MCP de `catalog-service`, y usa **todas** las tools que ese servidor exponga. No tiene una lista de nombres: si el servicio agrega una tool, el sub-agente la recibe sin cambios en el agente.
 3. **`MembershipSubAgent` (Especialista en Membresías y Socios)**:
    - ChatClient aislado con system prompt experto en socios y permisos.
-   - Recibe `@Qualifier("membershipTools")`, atado **solo** al cliente de `membership-service`: `get_socio`, `list_socios`.
+   - Recibe `@Qualifier("membershipTools")`, atado **solo** al cliente de `membership-service`, y usa todas sus tools.
 4. **`ExecutionTracker`**:
    - Registra en tiempo de ejecución los sub-agentes convocados (`agentsInvoked`), las herramientas ejecutadas (`toolsExecuted`) y los artefactos Generative UI producidos (`artifacts`).
    - **Los artefactos se capturan en `OrchestratorTools`**, en el momento en que el sub-agente retorna, y el orquestador recibe la prosa ya sin el bloque estructurado. Se hace así porque el orquestador es un modelo de lenguaje que reescribe prosa: se lo observó convirtiendo el bloque del sub-agente en viñetas markdown, destruyendo las tarjetas en silencio. No puede romper lo que nunca recibe (ver [ADR-024](./docs/adr.md#adr-024-el-artefacto-generative-ui-se-captura-antes-del-orquestador)).
 5. **`AbstractDomainSubAgent` (Base y Protección Fail-Fast)**:
-   - Clase base abstracta que encapsula el filtrado de herramientas, el registro en el tracker y la ejecución del ChatClient.
+   - Clase base abstracta que resuelve las tools del provider dedicado (todas, sin filtrar por nombre), las registra en el tracker y ejecuta el ChatClient. El límite del dominio lo define `McpClientConfiguration`, no el sub-agente.
    - **Fail-Fast contra Alucinaciones**: Si un sub-agente especializado detecta 0 herramientas MCP disponibles para su dominio, interrumpe de inmediato con `IllegalStateException` y log `ERROR`. Esto previene la degradación silenciosa donde el LLM respondería inventando datos falsos sin herramientas reales.
 6. **`McpClientConfiguration` (Un cliente por servicio)**:
    - Publica cinco beans: un `McpSyncClient` por backend, un `SyncMcpToolCallbackProvider` con `@Qualifier` para cada uno, y un tercero `@Primary` que agrega ambos — el que inyecta `AgentService` por tipo para responder `GET /api/agent/tools` con las 6 tools. **Sin ese `@Primary` el arranque muere con `NoUniqueBeanDefinitionException`.**

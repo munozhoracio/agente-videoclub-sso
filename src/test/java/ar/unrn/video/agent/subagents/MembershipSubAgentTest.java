@@ -26,14 +26,9 @@ class MembershipSubAgentTest {
     private SyncMcpToolCallbackProvider toolCallbackProvider;
 
     @Test
-    @DisplayName("Throws IllegalStateException and refuses to execute if no membership MCP tools are available (fail-fast against hallucination)")
+    @DisplayName("Throws IllegalStateException and refuses to execute if the dedicated membership MCP provider exposes no tools (fail-fast against hallucination)")
     void shouldFailFastWhenNoMembershipToolsDiscovered() {
-        final ToolCallback unrelatedTool = mock(ToolCallback.class);
-        final ToolDefinition unrelatedDef = mock(ToolDefinition.class);
-        when(unrelatedDef.name()).thenReturn("list_movies");
-        when(unrelatedTool.getToolDefinition()).thenReturn(unrelatedDef);
-
-        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[]{unrelatedTool});
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[0]);
 
         final MembershipSubAgent agent = new MembershipSubAgent(chatClientBuilder, toolCallbackProvider);
         final ExecutionTracker tracker = new ExecutionTracker();
@@ -44,5 +39,24 @@ class MembershipSubAgentTest {
                 .hasMessageContaining("Socios y Membresías");
 
         assertThat(tracker.getAgentsInvoked()).contains("MembershipSubAgent");
+    }
+
+    @Test
+    @DisplayName("Resolves every tool the dedicated membership MCP provider exposes, with no name filtering")
+    void shouldResolveAllToolsFromDedicatedProviderWithoutFiltering() {
+        final ToolCallback newTool = mock(ToolCallback.class);
+        final ToolDefinition newToolDef = mock(ToolDefinition.class);
+        when(newToolDef.name()).thenReturn("delete_movie");
+        when(newTool.getToolDefinition()).thenReturn(newToolDef);
+
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[]{newTool});
+
+        final MembershipSubAgent agent = new MembershipSubAgent(chatClientBuilder, toolCallbackProvider);
+        final ExecutionTracker tracker = new ExecutionTracker();
+
+        final ToolCallback[] resolvedTools = agent.resolveDomainTools(tracker);
+
+        assertThat(resolvedTools).hasSize(1);
+        assertThat(resolvedTools[0].getToolDefinition().name()).isEqualTo("delete_movie");
     }
 }
