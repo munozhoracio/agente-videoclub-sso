@@ -59,7 +59,8 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
                 MovieItem.class,
                 UiArtifact.class,
                 AgentController.ChatRequest.class,
-                AgentController.ChatResponse.class);
+                AgentController.ChatResponse.class,
+                ar.unrn.video.agent.model.AgentStreamEvent.class);
 
         // OpenTelemetry / Protobuf reflection hint.
         // com.google.protobuf.ExtensionRegistry.getEmptyRegistry() is invoked reflectively

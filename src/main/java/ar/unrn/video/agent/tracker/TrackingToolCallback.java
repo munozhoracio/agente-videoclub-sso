@@ -12,10 +12,16 @@ public class TrackingToolCallback implements ToolCallback {
 
     private final ToolCallback delegate;
     private final ExecutionTracker tracker;
+    private final org.springframework.security.core.context.SecurityContext securityContext;
 
     public TrackingToolCallback(final ToolCallback delegate, final ExecutionTracker tracker) {
+        this(delegate, tracker, org.springframework.security.core.context.SecurityContextHolder.getContext());
+    }
+
+    public TrackingToolCallback(final ToolCallback delegate, final ExecutionTracker tracker, final org.springframework.security.core.context.SecurityContext securityContext) {
         this.delegate = delegate;
         this.tracker = tracker;
+        this.securityContext = securityContext != null ? securityContext : org.springframework.security.core.context.SecurityContextHolder.getContext();
     }
 
     @Override
@@ -30,25 +36,37 @@ public class TrackingToolCallback implements ToolCallback {
 
     @Override
     public String call(final String toolInput) {
-        final String toolName = delegate.getToolDefinition().name();
-        tracker.recordTool(toolName);
+        final org.springframework.security.core.context.SecurityContext previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
         try {
+            if (securityContext != null) {
+                org.springframework.security.core.context.SecurityContextHolder.setContext(securityContext);
+            }
+            final String toolName = delegate.getToolDefinition().name();
+            tracker.recordTool(toolName);
             return delegate.call(toolInput);
         } catch (Exception e) {
-            checkAndRecordDenial(toolName, e);
+            checkAndRecordDenial(delegate.getToolDefinition().name(), e);
             throw e;
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
         }
     }
 
     @Override
     public String call(final String toolInput, final ToolContext toolContext) {
-        final String toolName = delegate.getToolDefinition().name();
-        tracker.recordTool(toolName);
+        final org.springframework.security.core.context.SecurityContext previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
         try {
+            if (securityContext != null) {
+                org.springframework.security.core.context.SecurityContextHolder.setContext(securityContext);
+            }
+            final String toolName = delegate.getToolDefinition().name();
+            tracker.recordTool(toolName);
             return delegate.call(toolInput, toolContext);
         } catch (Exception e) {
-            checkAndRecordDenial(toolName, e);
+            checkAndRecordDenial(delegate.getToolDefinition().name(), e);
             throw e;
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
         }
     }
 

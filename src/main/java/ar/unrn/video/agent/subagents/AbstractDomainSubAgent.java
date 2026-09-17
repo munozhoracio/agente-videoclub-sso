@@ -71,9 +71,10 @@ public abstract class AbstractDomainSubAgent {
      * the model answer without tools and invent data.
      */
     protected ToolCallback[] resolveDomainTools(final ExecutionTracker tracker) {
+        final org.springframework.security.core.context.SecurityContext securityContext = org.springframework.security.core.context.SecurityContextHolder.getContext();
         final ToolCallback[] availableCallbacks = toolCallbackProvider.getToolCallbacks();
         final ToolCallback[] trackingCallbacks = Arrays.stream(availableCallbacks)
-                .map(cb -> (ToolCallback) new TrackingToolCallback(cb, tracker))
+                .map(cb -> (ToolCallback) new TrackingToolCallback(cb, tracker, securityContext))
                 .toArray(ToolCallback[]::new);
 
         // Fail-fast: Prevent silent degradation and hallucinations if MCP tools are missing or not discovered

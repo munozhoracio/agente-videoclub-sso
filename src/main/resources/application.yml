@@ -10,6 +10,10 @@ spring:
         jwt:
           issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:9090/realms/videoclub}
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:9090/realms/videoclub/protocol/openid-connect/certs}
+
+  mvc:
+    async:
+      request-timeout: 60000
   
   ai:
     openai:

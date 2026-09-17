@@ -19,6 +19,11 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfiguration {
 
+    static {
+        org.springframework.security.core.context.SecurityContextHolder.setStrategyName(
+                org.springframework.security.core.context.SecurityContextHolder.MODE_INHERITABLETHREADLOCAL);
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(final HttpSecurity http) throws Exception {
         http

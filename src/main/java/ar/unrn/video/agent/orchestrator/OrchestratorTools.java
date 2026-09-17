@@ -9,6 +9,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+import ar.unrn.video.agent.model.AgentStreamEvent;
+
+import java.util.function.Consumer;
+
 /**
  * Tools available to the Supervisor/Orchestrator Agent.
  * Instead of low-level database or MCP calls, the orchestrator delegates to specialized sub-agents.
@@ -35,6 +39,8 @@ public class OrchestratorTools {
     private final ExecutionTracker tracker;
     private final GenerativeUiExtractor generativeUiExtractor;
     private final String callerName;
+    private final Consumer<AgentStreamEvent> eventConsumer;
+    private final org.springframework.security.core.context.SecurityContext securityContext;
 
     public OrchestratorTools(
             final CatalogSubAgent catalogSubAgent,
@@ -42,11 +48,34 @@ public class OrchestratorTools {
             final ExecutionTracker tracker,
             final GenerativeUiExtractor generativeUiExtractor,
             final String callerName) {
+        this(catalogSubAgent, membershipSubAgent, tracker, generativeUiExtractor, callerName, null, org.springframework.security.core.context.SecurityContextHolder.getContext());
+    }
+
+    public OrchestratorTools(
+            final CatalogSubAgent catalogSubAgent,
+            final MembershipSubAgent membershipSubAgent,
+            final ExecutionTracker tracker,
+            final GenerativeUiExtractor generativeUiExtractor,
+            final String callerName,
+            final Consumer<AgentStreamEvent> eventConsumer) {
+        this(catalogSubAgent, membershipSubAgent, tracker, generativeUiExtractor, callerName, eventConsumer, org.springframework.security.core.context.SecurityContextHolder.getContext());
+    }
+
+    public OrchestratorTools(
+            final CatalogSubAgent catalogSubAgent,
+            final MembershipSubAgent membershipSubAgent,
+            final ExecutionTracker tracker,
+            final GenerativeUiExtractor generativeUiExtractor,
+            final String callerName,
+            final Consumer<AgentStreamEvent> eventConsumer,
+            final org.springframework.security.core.context.SecurityContext securityContext) {
         this.catalogSubAgent = catalogSubAgent;
         this.membershipSubAgent = membershipSubAgent;
         this.tracker = tracker;
         this.generativeUiExtractor = generativeUiExtractor;
         this.callerName = callerName;
+        this.eventConsumer = eventConsumer;
+        this.securityContext = securityContext != null ? securityContext : org.springframework.security.core.context.SecurityContextHolder.getContext();
     }
 
     @Tool(description = "Delegates any operation related to the movie catalog to the specialized Catalog Agent. "
@@ -56,14 +85,44 @@ public class OrchestratorTools {
     public String consultCatalogAgent(
             @ToolParam(description = "Self-contained query or instruction about movies or catalog, explicitly resolving any pronouns, anaphora or prior conversational references") final String query) {
         log.info("Orchestrator delegating to CatalogSubAgent with query: {}", query);
-        return captureArtifacts("CatalogSubAgent", catalogSubAgent.execute(query, tracker, callerName));
+        if (eventConsumer != null) {
+            eventConsumer.accept(AgentStreamEvent.status("CatalogSubAgent", "Consultando catálogo de películas..."));
+        }
+        final org.springframework.security.core.context.SecurityContext previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        try {
+            if (securityContext != null) {
+                org.springframework.security.core.context.SecurityContextHolder.setContext(securityContext);
+            }
+            final String result = captureArtifacts("CatalogSubAgent", catalogSubAgent.execute(query, tracker, callerName));
+            if (eventConsumer != null) {
+                eventConsumer.accept(AgentStreamEvent.status("CatalogSubAgent", "Respuesta recibida del catálogo"));
+            }
+            return result;
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
     }
 
     @Tool(description = "Delegates inquiries about club members, socios, partners, membership status, or member listings to the specialized Membership Agent.")
     public String consultMembershipAgent(
             @ToolParam(description = "Self-contained query about members or socios, explicitly resolving any pronouns, anaphora or prior conversational references") final String query) {
         log.info("Orchestrator delegating to MembershipSubAgent with query: {}", query);
-        return captureArtifacts("MembershipSubAgent", membershipSubAgent.execute(query, tracker, callerName));
+        if (eventConsumer != null) {
+            eventConsumer.accept(AgentStreamEvent.status("MembershipSubAgent", "Consultando padrón de socios..."));
+        }
+        final org.springframework.security.core.context.SecurityContext previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        try {
+            if (securityContext != null) {
+                org.springframework.security.core.context.SecurityContextHolder.setContext(securityContext);
+            }
+            final String result = captureArtifacts("MembershipSubAgent", membershipSubAgent.execute(query, tracker, callerName));
+            if (eventConsumer != null) {
+                eventConsumer.accept(AgentStreamEvent.status("MembershipSubAgent", "Respuesta recibida de socios"));
+            }
+            return result;
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
     }
 
     /**
@@ -80,8 +139,20 @@ public class OrchestratorTools {
             tracker.recordArtifacts(extraction.artifacts());
             log.info("Captured {} Generative UI artifact(s) from {} before the orchestrator saw the text",
                     extraction.artifacts().size(), agentName);
+            if (eventConsumer != null) {
+                eventConsumer.accept(AgentStreamEvent.artifact(extraction.artifacts()));
+            }
         }
 
-        return extraction.text();
+        final String text = extraction.text() != null ? extraction.text().trim() : "";
+        if (text.isBlank()) {
+            if (!extraction.artifacts().isEmpty()) {
+                return "Se obtuvieron y cargaron exitosamente las películas en las tarjetas interactivas del sistema. "
+                        + "Confirmale amablemente al usuario sin repetir los detalles técnicos ni bloques JSON.";
+            }
+            return "Operación completada por " + agentName + ".";
+        }
+
+        return text;
     }
 }

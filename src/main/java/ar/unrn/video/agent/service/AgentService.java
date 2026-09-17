@@ -88,21 +88,7 @@ public class AgentService {
                 user.fullName()
         );
 
-        final String systemPrompt = String.format(
-                "Sos el Agente Orquestador y Supervisor oficial de VideoClub UNRN. "
-                + "Estás atendiendo a %s (usuario: '%s', email: '%s', rol: %s). "
-                + "Mantené y aprovechá el contexto y la memoria de la conversación a lo largo de los turnos. "
-                + "Tu función es coordinar la atención al usuario delegando en tus sub-agentes especializados: "
-                + "analizá la intención del usuario y usá el sub-agente correspondiente según la descripción de cada herramienta disponible. "
-                + "Reglas de comportamiento: "
-                + "- Recordá y utilizá las respuestas anteriores de esta conversación para responder de forma coherente. "
-                + "- Para saludos de cortesía, presentaciones o preguntas generales sobre qué podés hacer, respondé directamente con amabilidad sin invocar a ningún sub-agente. "
-                + "- REGLA CRÍTICA DE DELEGACIÓN: Los sub-agentes NO tienen acceso a la memoria conversacional. Cada vez que invoques una herramienta de delegación, debés REFORMULAR la consulta de manera completamente AUTO-CONTENIDA, resolviendo pronombres, referencias implícitas y anáforas previas del historial. "
-                + "- TARJETAS INTERACTIVAS: las fichas de las películas las monta el sistema por fuera de tu texto, a partir de los datos que ya capturó del sub-agente. No necesitás hacer nada para que aparezcan y no podés romperlas. NUNCA escribas bloques JSON ni repitas en viñetas los datos o fichas de las películas (sin listas de título, precio, género o imágenes), porque el usuario los vería duplicados: una vez en tu texto y otra en las tarjetas. Tu texto debe ser solo una introducción breve, natural y amigable. "
-                + "- Si una consulta requiere ambos dominios, podés invocar a ambos sub-agentes y consolidar una respuesta integrada. "
-                + "- Respondé siempre en español de forma clara, natural, profesional y precisa.",
-                user.fullName(), user.username(), user.email(), user.roles()
-        );
+        final String systemPrompt = buildSystemPrompt(user);
 
         // El scheduler se pasa EXPLICITAMENTE, no por omision. El default del builder es
         // BaseAdvisor.DEFAULT_SCHEDULER, una constante de interfaz inicializada con
@@ -148,6 +134,113 @@ public class AgentService {
 
         return new ChatResult(extraction.text(), conversationId, agentsInvoked, toolsExecuted, toolsDenied,
                 toolsAvailable, fromMemory, artifacts);
+    }
+
+    /**
+     * Orchestrates user chat using streaming SSE events, notifying a consumer of progress,
+     * tool artifacts, and generated tokens in real time.
+     */
+    public void chatStream(
+            final String userPrompt,
+            final String requestedConversationId,
+            final java.util.function.Consumer<ar.unrn.video.agent.model.AgentStreamEvent> eventConsumer) {
+        log.info("Orchestrator received streaming prompt: {}", userPrompt);
+
+        final UserProfile user = UserProfile.from(SecurityContextHolder.getContext().getAuthentication());
+        final String conversationId = (requestedConversationId != null && !requestedConversationId.isBlank())
+                ? requestedConversationId
+                : user.username();
+
+        seedInitialMemoryIfEmpty(conversationId, user);
+
+        final int historySizeBeforeTurn = chatMemory.get(conversationId).size();
+
+        final ExecutionTracker tracker = new ExecutionTracker();
+        final OrchestratorTools orchestratorTools = new OrchestratorTools(
+                catalogSubAgent,
+                membershipSubAgent,
+                tracker,
+                generativeUiExtractor,
+                user.fullName(),
+                eventConsumer
+        );
+
+        final String systemPrompt = buildSystemPrompt(user);
+
+        final MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory)
+                .scheduler(Schedulers.boundedElastic())
+                .build();
+
+        if (eventConsumer != null) {
+            eventConsumer.accept(ar.unrn.video.agent.model.AgentStreamEvent.status("Orchestrator", "Iniciando análisis de la consulta..."));
+        }
+
+        final reactor.core.publisher.Flux<String> contentFlux = chatClientBuilder.build().prompt()
+                .system(systemPrompt)
+                .tools(orchestratorTools)
+                .user(userPrompt)
+                .advisors(advisorSpec -> {
+                    advisorSpec.advisors(memoryAdvisor);
+                    advisorSpec.param(ChatMemory.CONVERSATION_ID, conversationId);
+                })
+                .stream()
+                .content();
+
+        final StringBuilder fullResponse = new StringBuilder();
+
+        contentFlux.toStream().forEach(token -> {
+            fullResponse.append(token);
+            if (eventConsumer != null) {
+                eventConsumer.accept(ar.unrn.video.agent.model.AgentStreamEvent.delta(token));
+            }
+        });
+
+        // Fallback extraction in case artifacts were emitted directly by the orchestrator
+        if (tracker.getArtifacts().isEmpty()) {
+            final GenerativeUiExtractor.ExtractionResult extraction = generativeUiExtractor.extract(fullResponse.toString());
+            if (!extraction.artifacts().isEmpty()) {
+                if (eventConsumer != null) {
+                    eventConsumer.accept(ar.unrn.video.agent.model.AgentStreamEvent.artifact(extraction.artifacts()));
+                }
+            }
+        }
+
+        final List<String> agentsInvoked = tracker.getAgentsInvoked();
+        final List<String> toolsExecuted = tracker.getToolsExecuted();
+        final List<String> toolsDenied = tracker.getToolsDenied();
+        final boolean fromMemory = historySizeBeforeTurn > 2 && toolsExecuted.isEmpty() && agentsInvoked.isEmpty();
+
+        log.info("Streaming turn completed for conversationId: {}. Agents: {}, Tools: {}, Denied: {}, FromMemory: {}",
+                conversationId, agentsInvoked, toolsExecuted, toolsDenied, fromMemory);
+
+        if (eventConsumer != null) {
+            eventConsumer.accept(ar.unrn.video.agent.model.AgentStreamEvent.done(
+                    conversationId,
+                    agentsInvoked,
+                    toolsExecuted,
+                    toolsDenied,
+                    getAvailableToolNames(),
+                    fromMemory
+            ));
+        }
+    }
+
+    private String buildSystemPrompt(final UserProfile user) {
+        return String.format(
+                "Sos el Agente Orquestador y Supervisor oficial de VideoClub UNRN. "
+                + "Estás atendiendo a %s (usuario: '%s', email: '%s', rol: %s). "
+                + "Mantené y aprovechá el contexto y la memoria de la conversación a lo largo de los turnos. "
+                + "Tu función es coordinar la atención al usuario delegando en tus sub-agentes especializados: "
+                + "analizá la intención del usuario y usá el sub-agente correspondiente según la descripción de cada herramienta disponible. "
+                + "Reglas de comportamiento: "
+                + "- Recordá y utilizá las respuestas anteriores de esta conversación para responder de forma coherente. "
+                + "- Para saludos de cortesía, presentaciones o preguntas generales sobre qué podés hacer, respondé directamente con amabilidad sin invocar a ningún sub-agente. "
+                + "- REGLA CRÍTICA DE DELEGACIÓN: Los sub-agentes NO tienen acceso a la memoria conversacional. Cada vez que invoques una herramienta de delegación, debés REFORMULAR la consulta de manera completamente AUTO-CONTENIDA, resolviendo pronombres, referencias implícitas y anáforas previas del historial. "
+                + "- TARJETAS INTERACTIVAS: las fichas de las películas las monta el sistema por fuera de tu texto, a partir de los datos que ya capturó del sub-agente. No necesitás hacer nada para que aparezcan y no podés romperlas. NUNCA escribas bloques JSON ni repitas en viñetas los datos o fichas de las películas (sin listas de título, precio, género o imágenes), porque el usuario los vería duplicados: una vez en tu texto y otra en las tarjetas. Tu texto debe ser solo una introducción breve, natural y amigable. "
+                + "- Si una consulta requiere ambos dominios, podés invocar a ambos sub-agentes y consolidar una respuesta integrada. "
+                + "- Respondé siempre en español de forma clara, natural, profesional y precisa.",
+                user.fullName(), user.username(), user.email(), user.roles()
+        );
     }
 
     /**
