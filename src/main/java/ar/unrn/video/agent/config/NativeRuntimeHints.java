@@ -30,8 +30,7 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
         // Tool discovery. INVOKE_DECLARED_METHODS covers both halves of the problem: the
         // scan that looks for the annotation, and the later reflective call to the method.
         hints.reflection().registerType(OrchestratorTools.class,
-                MemberCategory.INVOKE_DECLARED_METHODS,
-                MemberCategory.INTROSPECT_DECLARED_METHODS);
+                MemberCategory.INVOKE_DECLARED_METHODS);
 
         // Generative UI payloads. These records are bound by Jackson from a call the
         // framework cannot see: GenerativeUiExtractor reads the model's ```json:movies
@@ -68,5 +67,54 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
         hints.reflection().registerType(
                 TypeReference.of("com.google.protobuf.ExtensionRegistry"),
                 MemberCategory.INVOKE_PUBLIC_METHODS);
+
+        registerOpenAiModelHints(hints);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void registerOpenAiModelHints(final RuntimeHints hints) {
+        // OpenAI Java SDK (Stainless) reflection hints for GraalVM Native Image.
+        // Models in the official com.openai:openai-java SDK use
+        // `@JsonAnySetter private final void putAdditionalProperty(String, JsonValue)`
+        // to capture unknown/extra fields from OpenAI or compatible endpoints (e.g. Ollama returning
+        // 'reasoning' on messages or 'index' on tool calls). GraalVM Native Image blocks reflective
+        // invocation of private methods unless INVOKE_DECLARED_METHODS is registered.
+        final Class<?>[] openAiModels = {
+            com.openai.models.chat.completions.ChatCompletion.class,
+            com.openai.models.chat.completions.ChatCompletion.Choice.class,
+            com.openai.models.chat.completions.ChatCompletion.Choice.Logprobs.class,
+            com.openai.models.chat.completions.ChatCompletionMessage.class,
+            com.openai.models.chat.completions.ChatCompletionMessage.FunctionCall.class,
+            com.openai.models.chat.completions.ChatCompletionMessage.Annotation.class,
+            com.openai.models.chat.completions.ChatCompletionMessageToolCall.class,
+            com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall.class,
+            com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall.Function.class,
+            com.openai.models.chat.completions.ChatCompletionMessageCustomToolCall.class,
+            com.openai.models.chat.completions.ChatCompletionChunk.class,
+            com.openai.models.chat.completions.ChatCompletionChunk.Choice.class,
+            com.openai.models.chat.completions.ChatCompletionChunk.Choice.Delta.class,
+            com.openai.models.chat.completions.ChatCompletionChunk.Choice.Delta.FunctionCall.class,
+            com.openai.models.chat.completions.ChatCompletionChunk.Choice.Delta.ToolCall.class,
+            com.openai.models.chat.completions.ChatCompletionChunk.Choice.Delta.ToolCall.Function.class,
+            com.openai.models.completions.CompletionUsage.class,
+            com.openai.models.completions.CompletionUsage.PromptTokensDetails.class,
+            com.openai.models.completions.CompletionUsage.CompletionTokensDetails.class,
+            com.openai.core.JsonValue.class,
+            com.openai.core.JsonField.class,
+            com.openai.core.JsonObject.class,
+            com.openai.core.JsonArray.class,
+            com.openai.core.JsonString.class,
+            com.openai.core.JsonNumber.class,
+            com.openai.core.JsonBoolean.class,
+            com.openai.core.JsonNull.class,
+            com.openai.core.JsonMissing.class
+        };
+
+        for (final Class<?> clazz : openAiModels) {
+            hints.reflection().registerType(clazz,
+                    MemberCategory.INVOKE_DECLARED_METHODS,
+                    MemberCategory.INVOKE_DECLARED_CONSTRUCTORS,
+                    MemberCategory.ACCESS_DECLARED_FIELDS);
+        }
     }
 }

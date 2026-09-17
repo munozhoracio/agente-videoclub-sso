@@ -29,6 +29,7 @@ services:
             STAGE: ${STAGE}
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             OPENAI_MODEL: ${OPENAI_MODEL}
+            OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
             # Un endpoint MCP por servicio desde que el backend se separo en dos.
             # Con default: si el archivo de entorno todavia trae el viejo VIDEOCLUB_MCP_URL,
             # una variable sin definir se expandiria a cadena vacia y pisaria el default del
