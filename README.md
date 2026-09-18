@@ -16,15 +16,16 @@ Spring Boot 4 + Spring AI microservice that acts as an intelligent assistant for
 
 ---
 
-## Documentation
+## Documentación y Decisiones de Arquitectura (ADR)
 
-> 🧭 **Plataforma VideoClub:** Para la visión integral de la arquitectura, seguridad SSO transversal, topología de red y catálogo central de ADRs, consultá la [Documentación de Arquitectura de la Plataforma](https://github.com/hmunoz/springboot-sso/tree/2026/docs).
-
-* [ADR Index — Decisiones de Diseño del Agente](./docs/adr.md)
-* [SSO Token Propagation (Token Relay) — implemented architecture](./docs/sso-token-propagation.md)
-* [Gateway Integration, Token Relay & React Chat Tab (as built)](./docs/gateway-agent-integration.md)
-* [Generative UI Pattern (SSE Streaming)](./docs/generative-ui-pattern.md)
-* [Plan de Arquitectura de Streaming AG-UI](./docs/agui-streaming-plan.md)
+> 🧭 **Documentación Centralizada:** Toda la documentación técnica del agente, decisiones de arquitectura (ADRs), especificaciones de streaming y propagación de seguridad SSO se encuentran centralizadas en el hub de [**`springboot-sso/docs`**](../springboot-sso/docs/README.md):
+>
+> * [Hub Central de Documentación (`springboot-sso/docs`)](../springboot-sso/docs/README.md)
+> * [ADR Index — Decisiones de Diseño del Agente (ADR-013 a ADR-024)](../springboot-sso/docs/adr-agente.md)
+> * [SSO Token Propagation (Token Relay)](../springboot-sso/docs/sso-token-propagation.md)
+> * [Gateway Integration, Token Relay & React Chat Tab](../springboot-sso/docs/gateway-agent-integration.md)
+> * [Generative UI Pattern (SSE Streaming)](../springboot-sso/docs/generative-ui-pattern.md)
+> * [Plan de Arquitectura de Streaming AG-UI](../springboot-sso/docs/plan/agui-streaming-plan.md)
 
 ---
 
